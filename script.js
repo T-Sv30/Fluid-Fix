@@ -90,6 +90,17 @@ let config = {
     EDGE_BOUNCE: 0,
     EDGE_SOFTNESS: 50,
     CORNER: 'Normal',
+    // Stage 2
+    TOUCH_RADIUS: 50,
+    TOUCH_ATTRACTION: 0,
+    TOUCH_REPULSION: 0,
+    MULTI_TOUCH: 50,
+    CONTINUOUS_DRAWING: false,
+    TOUCH_SENSITIVITY: 50,
+    GESTURE: 'Push',
+    INJECTION: 'Continuous',
+    FORCE_FIELD: 'None',
+    FIELD_STRENGTH: 50,
 }
 
 
@@ -233,15 +244,15 @@ function symmetryCopies (x, y, dx, dy) {
         for (let k = 0; k < n; k++) {
             const a = (Math.PI * 2 * k) / n;
             const c = Math.cos(a), s = Math.sin(a);
-            out.push([(px * c - py * s) / ar + 0.5, px * s + py * c + 0.5, dx * c - dy * s, dx * s + dy * c]);
+            out.push([(px * c - py * s) / ar + 0.5, px * s + py * c + 0.5, dx * c - dy * s, dx * s + dy * c, false]);
             // reflected copy
-            out.push([(-px * c - py * s) / ar + 0.5, -px * s + py * c + 0.5, -dx * c - dy * s, -dx * s + dy * c]);
+            out.push([(-px * c - py * s) / ar + 0.5, -px * s + py * c + 0.5, -dx * c - dy * s, -dx * s + dy * c, true]);
         }
         return dedupeCopies(out);
     }
     if (config.MIRROR)
-        return dedupeCopies([[x, y, dx, dy], [1 - x, y, -dx, dy]]);
-    return [[x, y, dx, dy]];
+        return dedupeCopies([[x, y, dx, dy, false], [1 - x, y, -dx, dy, true]]);
+    return [[x, y, dx, dy, false]];
 }
 
 // Drop copies that land on the same spot moving the same way (they would only double the brightness)
@@ -504,6 +515,10 @@ function pointerPrototype () {
     this.down = false;
     this.moved = false;
     this.color = [30, 0, 300];
+    this.justDown = false;
+    this.heldTime = 0;
+    this.dirX = 0;
+    this.dirY = 1;
 }
 
 let pointers = [];
@@ -630,6 +645,7 @@ function forcesActive () {
     return FLOW_DIRECTIONS[config.FLOW_DIRECTION] != null && config.FLOW_SPEED > 0
         || config.SWIRL > 0 || config.TURBULENCE > 0 || config.GRAVITY > 0
         || config.BUOYANCY !== 50 || config.ELASTICITY > 0
+        || config.FORCE_FIELD !== 'None' && config.FIELD_STRENGTH > 0
         || effectiveEdgeMode() !== 1 && (effectiveEdgeMode() === 3 || config.EDGE_FRICTION > 0 || config.EDGE_BOUNCE > 0 || config.CORNER !== 'Normal');
 }
 
@@ -645,6 +661,184 @@ function applyRandomness (dt) {
         const v = (150 + 650 * r) * Math.random();
         splatVelocity(Math.random(), Math.random(), Math.cos(a) * v, Math.sin(a) * v, 0.6 + Math.random());
     }
+}
+
+// Stage 2: touch, gestures, injection modes and force fields
+
+const GESTURE_MODES = ['Push', 'Pull', 'Swirl', 'Attract', 'Repel', 'Inject', 'Erase', 'Vortex'];
+const INJECTION_MODES = ['Continuous', 'Burst', 'Pulse', 'Spray', 'Fountain', 'Random', 'Directional'];
+const FORCE_FIELDS = ['None', 'Vortex', 'Attractor', 'Repeller', 'Spiral', 'Radial', 'Wave', 'Magnetic'];
+
+// 0..50% = 0.2x..1x, 50..100% = 1x..3x
+const pctScaleTo = p => p <= 50 ? 0.2 + 0.8 * p / 50 : 1 + (p - 50) / 25;
+
+let splatRadiusScale = 1;
+
+function activeTouchCount () {
+    return pointers.filter(p => p.down).length;
+}
+
+function cycleSetting (key, list, label) {
+    const i = list.indexOf(config[key]);
+    config[key] = list[(i + 1) % list.length];
+    showToast(label + ' · ' + config[key]);
+}
+
+// Applies a local effect around (x, y) on velocity and/or dye, honoring Mirror/Kaleidoscope.
+// radial/tangential add velocity (texels/s), warp moves color (+ away, - toward), fade erases color.
+function pointEffect (x, y, opts) {
+    const radius = correctRadius(config.SPLAT_RADIUS * splatRadiusScale * (opts.area || 4) / 100.0);
+    symmetryCopies(x, y, 0, 0).forEach(c => {
+        const spin = c[4] ? -1 : 1;
+        if (opts.radial || opts.tangential) {
+            pointForceProgram.bind();
+            const u = pointForceProgram.uniforms;
+            gl.uniform1i(u.uTarget, velocity.read.attach(0));
+            gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+            gl.uniform2f(u.point, c[0], c[1]);
+            gl.uniform1f(u.radius, radius);
+            gl.uniform1f(u.radial, opts.radial || 0);
+            gl.uniform1f(u.tangential, (opts.tangential || 0) * spin);
+            gl.uniform1f(u.warp, 0);
+            gl.uniform1f(u.fade, opts.velocityFade || 0);
+            blit(velocity.write);
+            velocity.swap();
+        }
+        if (opts.warp || opts.fade) {
+            pointForceProgram.bind();
+            const u = pointForceProgram.uniforms;
+            gl.uniform1i(u.uTarget, dye.read.attach(0));
+            gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+            gl.uniform2f(u.point, c[0], c[1]);
+            gl.uniform1f(u.radius, radius);
+            gl.uniform1f(u.radial, 0);
+            gl.uniform1f(u.tangential, 0);
+            gl.uniform1f(u.warp, opts.warp || 0);
+            gl.uniform1f(u.fade, opts.fade || 0);
+            blit(dye.write);
+            dye.swap();
+        }
+    });
+}
+
+function randomSpectrumColor () {
+    return finishColor(HSVtoRGB(Math.random(), 1.0, 1.0));
+}
+
+// How color leaves the finger
+function injectColor (p, moved, dt, vx, vy, force) {
+    const x = p.texcoordX, y = p.texcoordY;
+    const mode = config.INJECTION;
+    const ar = canvas.width / canvas.height;
+    const jet = 900 * force;
+
+    switch (mode) {
+        case 'Continuous':
+            if (moved) emitSplat(x, y, vx, vy, p.color);
+            else if (config.CONTINUOUS_DRAWING) emitSplat(x, y, 0, 0, p.color, 0.5);
+            break;
+        case 'Burst':
+            if (p.justDown) {
+                for (let i = 0; i < 10; i++) {
+                    const a = (Math.PI * 2 * i) / 10;
+                    emitSplat(x, y, Math.cos(a) * jet * 1.3, Math.sin(a) * jet * 1.3, colorAt(i / 10 + Math.random() * 0.1), 2.5);
+                }
+            }
+            if (moved) emitSplat(x, y, vx, vy, p.color, 0.6);
+            else if (config.CONTINUOUS_DRAWING) emitSplat(x, y, 0, 0, p.color, 0.3);
+            break;
+        case 'Pulse': {
+            const phase = Math.sin(p.heldTime * Math.PI * 2 * 2.5);
+            if (phase > 0.2) emitSplat(x, y, vx, vy, p.color, 1.6 * phase);
+            else if (moved) emitSplat(x, y, vx, vy, p.color, 0.15);
+            break;
+        }
+        case 'Spray': {
+            splatRadiusScale *= 0.35;
+            for (let i = 0; i < 4; i++) {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.sqrt(Math.random()) * 0.06 * splatRadiusScale / 0.35;
+                emitSplat(x + Math.cos(a) * r / ar, y + Math.sin(a) * r,
+                          vx * 0.5 + Math.cos(a) * jet * 0.25, vy * 0.5 + Math.sin(a) * jet * 0.25, p.color, 0.9);
+            }
+            splatRadiusScale /= 0.35;
+            break;
+        }
+        case 'Fountain': {
+            const a = Math.PI / 2 + (Math.random() - 0.5) * 0.6;
+            emitSplat(x, y, Math.cos(a) * jet + vx * 0.3, Math.sin(a) * jet + vy * 0.3, p.color, 0.8);
+            break;
+        }
+        case 'Random': {
+            const a = Math.random() * Math.PI * 2;
+            emitSplat(x, y, Math.cos(a) * jet * 0.8 + vx * 0.5, Math.sin(a) * jet * 0.8 + vy * 0.5, randomSpectrumColor(), 0.9);
+            break;
+        }
+        case 'Directional':
+            emitSplat(x, y, p.dirX * jet + vx * 0.3, p.dirY * jet + vy * 0.3, p.color, 0.8);
+            break;
+    }
+}
+
+// Runs every frame for each finger / mouse button that is down (or just moved)
+function updateTouches (dt) {
+    const multi = activeTouchCount() > 1 ? pctScaleTo(config.MULTI_TOUCH) : 1;
+    const force = config.INTENSITY * multi;
+    const attract = config.TOUCH_ATTRACTION / 100;
+    const repel = config.TOUCH_REPULSION / 100;
+    splatRadiusScale = pctScaleTo(config.TOUCH_RADIUS);
+
+    pointers.forEach(p => {
+        const moved = p.moved;
+        p.moved = false;
+        if (!p.down && !moved) return;
+        if (p.down) p.heldTime = (p.heldTime || 0) + dt;
+
+        const x = p.texcoordX, y = p.texcoordY;
+        const vx = p.deltaX * config.SPLAT_FORCE * force;
+        const vy = p.deltaY * config.SPLAT_FORCE * force;
+
+        switch (config.GESTURE) {
+            case 'Push':
+                injectColor(p, moved, dt, vx, vy, force);
+                break;
+            case 'Pull':
+                pointEffect(x, y, { warp: -0.35 * force * dt, area: 5 });
+                injectColor(p, moved, dt, vx * 0.4, vy * 0.4, force * 0.5);
+                break;
+            case 'Swirl':
+                pointEffect(x, y, { tangential: 2200 * force * dt, area: 4 });
+                injectColor(p, moved, dt, vx * 0.5, vy * 0.5, force * 0.5);
+                break;
+            case 'Attract':
+                if (p.down) pointEffect(x, y, { radial: -900 * force * dt, warp: -0.4 * force * dt, area: 7 });
+                break;
+            case 'Repel':
+                if (p.down) pointEffect(x, y, { radial: 900 * force * dt, warp: 0.4 * force * dt, area: 7 });
+                break;
+            case 'Inject':
+                injectColor(p, moved, dt, vx * 0.15, vy * 0.15, force * 0.25);
+                if (p.down && !moved && config.INJECTION === 'Continuous' && !config.CONTINUOUS_DRAWING)
+                    emitSplat(x, y, 0, 0, p.color, 0.5);
+                break;
+            case 'Erase':
+                if (p.down || moved) pointEffect(x, y, { fade: Math.min(1, 8 * dt), velocityFade: Math.min(1, 3 * dt), area: 3 });
+                break;
+            case 'Vortex':
+                if (p.down) pointEffect(x, y, { tangential: 3500 * force * dt, warp: -0.15 * force * dt, area: 6 });
+                injectColor(p, moved, dt, vx * 0.3, vy * 0.3, force * 0.4);
+                break;
+        }
+
+        if (p.down && (attract > 0 || repel > 0)) {
+            const net = repel - attract;
+            pointEffect(x, y, { radial: net * 900 * dt, warp: net * 0.3 * dt, area: 7 });
+        }
+
+        p.justDown = false;
+    });
+
+    splatRadiusScale = 1;
 }
 
 startGUI();
@@ -771,6 +965,8 @@ function startGUI () {
     forcesFolder.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
     forcesFolder.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
     forcesFolder.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
+    forcesFolder.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field').listen();
+    forcesFolder.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
 
     let edgeFolder = gui.addFolder('Edges');
     edgeFolder.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
@@ -783,6 +979,14 @@ function startGUI () {
 
     let touchFolder = gui.addFolder('Touch');
     addPct(touchFolder, 'TOUCH_FORCE', 'touch force');
+    touchFolder.add(config, 'TOUCH_RADIUS', 0, 100).step(1).name('touch radius');
+    touchFolder.add(config, 'TOUCH_ATTRACTION', 0, 100).step(1).name('touch attraction');
+    touchFolder.add(config, 'TOUCH_REPULSION', 0, 100).step(1).name('touch repulsion');
+    touchFolder.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
+    touchFolder.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
+    touchFolder.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('touch sensitivity');
+    touchFolder.add(config, 'GESTURE', GESTURE_MODES).name('gesture mode').listen();
+    touchFolder.add(config, 'INJECTION', INJECTION_MODES).name('injection mode').listen();
 
     let modesFolder = gui.addFolder('Modes');
     modesFolder.add(config, 'VORTEX').name('vortex').listen();
@@ -1419,6 +1623,8 @@ const forcesShader = compileShader(gl.FRAGMENT_SHADER, `
     uniform float edgeFriction;
     uniform float edgeBounce;
     uniform float edgeSoftness;
+    uniform float fieldMode;
+    uniform float fieldStrength;
 
     float hash (vec2 p) {
         p = fract(p * vec2(123.34, 456.21));
@@ -1489,6 +1695,43 @@ const forcesShader = compileShader(gl.FRAGMENT_SHADER, `
         // Gravity and buoyancy act on the colored fluid
         v.y += buoyancy * w * dt;
 
+        // Force fields
+        if (fieldMode > 0.5) {
+            float S = fieldStrength;
+            float near = smoothstep(0.0, 0.08, r);
+            if (fieldMode < 1.5) {
+                // Vortex: whole-screen rotation, faster near the middle
+                v += relax(v, tangent, S * near * 1.6 / (1.0 + 3.0 * r), 2.5);
+            } else if (fieldMode < 2.5) {
+                // Attractor: colored fluid falls toward the center
+                v -= radial * near * S * 3.0 * w * dt;
+            } else if (fieldMode < 3.5) {
+                // Repeller: colored fluid is pushed out from the center
+                v += radial * near * S * 3.0 * w * dt;
+            } else if (fieldMode < 4.5) {
+                // Spiral: rotation plus inward pull
+                v += relax(v, tangent, S * near * 1.1 / (1.0 + 3.0 * r), 2.0);
+                v -= radial * near * S * 2.0 * w * dt;
+            } else if (fieldMode < 5.5) {
+                // Radial: slowly turning star of outward and inward rays
+                float ang = atan(p.y, p.x);
+                v += radial * near * sin(6.0 * ang + time * 0.5) * S * 3.0 * (0.3 + 0.7 * w) * dt;
+            } else if (fieldMode < 6.5) {
+                // Wave: traveling vertical waves
+                v.y += sin(p.x * 9.0 - time * 2.0) * S * 2.0 * dt;
+                v.x += sin(p.y * 7.0 + time * 1.3) * S * 0.6 * dt;
+            } else {
+                // Magnetic: two opposite poles; flow circles them and follows field lines
+                vec2 a = vec2(-0.22 * aspectRatio, 0.0);
+                vec2 b = vec2(0.22 * aspectRatio, 0.0);
+                vec2 pa = p - a;
+                vec2 pb = p - b;
+                vec2 E = pa / (dot(pa, pa) + 0.02) - pb / (dot(pb, pb) + 0.02);
+                vec2 R = vec2(-E.y, E.x);
+                v += (R * 0.5 + E * 0.8 * w) * S * 0.25 * dt;
+            }
+        }
+
         // Elasticity: spring back toward where the fluid started
         if (elasticity > 0.0)
             v -= texture2D(uDisp, vUv).xy * elasticity * dt;
@@ -1554,6 +1797,37 @@ const forcesShader = compileShader(gl.FRAGMENT_SHADER, `
         if (speed > 2500.0) v *= 2500.0 / speed;
 
         gl_FragColor = vec4(v, 0.0, 1.0);
+    }
+`);
+
+const pointForceShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uTarget;
+    uniform float aspectRatio;
+    uniform vec2 point;
+    uniform float radius;
+    uniform float radial;
+    uniform float tangential;
+    uniform float warp;
+    uniform float fade;
+
+    void main () {
+        vec2 d = vUv - point;
+        d.x *= aspectRatio;
+        float r = length(d);
+        float g = exp(-dot(d, d) / radius);
+        vec2 dir = r > 1e-5 ? d / r : vec2(0.0);
+        vec2 tang = vec2(-dir.y, dir.x);
+
+        vec2 off = dir * warp * g;
+        off.x /= aspectRatio;
+        vec4 c = texture2D(uTarget, vUv - off);
+        c.xy += (dir * radial + tang * tangential) * g;
+        c *= 1.0 - fade * g;
+        gl_FragColor = c;
     }
 `);
 
@@ -1794,6 +2068,7 @@ const backgroundProgram      = new Program(baseVertexShader, backgroundShader);
 const forcesProgram          = new Program(baseVertexShader, forcesShader);
 const displacementProgram    = new Program(baseVertexShader, displacementShader);
 const viscosityProgram       = new Program(baseVertexShader, viscosityShader);
+const pointForceProgram      = new Program(baseVertexShader, pointForceShader);
 const edgeDyeProgram         = new Program(baseVertexShader, edgeDyeShader);
 const advectionProgram       = new Program(baseVertexShader, advectionShader);
 const divergenceProgram      = new Program(baseVertexShader, divergenceShader);
@@ -2012,7 +2287,7 @@ function update () {
     updateColors(dt);
     updatePalette(dt);
     updateBackground(dt);
-    applyInputs();
+    applyInputs(dt);
     updateAutoplay(dt);
     updateVortex(dt);
     applyRandomness(dt);
@@ -2066,17 +2341,11 @@ function updateColors (dt) {
     }
 }
 
-function applyInputs () {
+function applyInputs (dt) {
     if (splatStack.length > 0)
         multipleSplats(splatStack.pop());
     applyInjections();
-
-    pointers.forEach(p => {
-        if (p.moved) {
-            p.moved = false;
-            splatPointer(p);
-        }
-    });
+    updateTouches(dt);
 }
 
 function step (dt) {
@@ -2188,6 +2457,8 @@ function applyForces (dt) {
         gl.uniform1f(u.edgeFriction, config.EDGE_FRICTION / 100);
         gl.uniform1f(u.edgeBounce, config.EDGE_BOUNCE / 100);
         gl.uniform1f(u.edgeSoftness, config.EDGE_SOFTNESS / 100);
+        gl.uniform1f(u.fieldMode, FORCE_FIELDS.indexOf(config.FORCE_FIELD));
+        gl.uniform1f(u.fieldStrength, config.FIELD_STRENGTH / 100 * 600);
         blit(velocity.write);
         velocity.swap();
     }
@@ -2359,12 +2630,6 @@ function blur (target, temp, iterations) {
     }
 }
 
-function splatPointer (pointer) {
-    let dx = pointer.deltaX * config.SPLAT_FORCE * config.INTENSITY;
-    let dy = pointer.deltaY * config.SPLAT_FORCE * config.INTENSITY;
-    emitSplat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color);
-}
-
 function multipleSplats (amount) {
     for (let i = 0; i < amount; i++) {
         const color = generateColor();
@@ -2385,7 +2650,7 @@ function splat (x, y, dx, dy, color) {
     gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
     gl.uniform2f(splatProgram.uniforms.point, x, y);
     gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
-    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS / 100.0));
+    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS * splatRadiusScale / 100.0));
     blit(velocity.write);
     velocity.swap();
 
@@ -2416,10 +2681,7 @@ function correctRadius (radius) {
 canvas.addEventListener('mousedown', e => {
     let posX = scaleByPixelRatio(e.offsetX);
     let posY = scaleByPixelRatio(e.offsetY);
-    let pointer = pointers.find(p => p.id == -1);
-    if (pointer == null)
-        pointer = new pointerPrototype();
-    updatePointerDownData(pointer, -1, posX, posY);
+    updatePointerDownData(pointers[0], -1, posX, posY);
 });
 
 canvas.addEventListener('mousemove', e => {
@@ -2434,39 +2696,53 @@ window.addEventListener('mouseup', () => {
     updatePointerUpData(pointers[0]);
 });
 
+// Each finger is tracked by its identifier, so lifting one finger never disturbs the others
+function touchPointer (identifier) {
+    return pointers.find((p, i) => i > 0 && p.down && p.id === identifier);
+}
+
 canvas.addEventListener('touchstart', e => {
     e.preventDefault();
-    const touches = e.targetTouches;
-    while (touches.length >= pointers.length)
-        pointers.push(new pointerPrototype());
+    const touches = e.changedTouches;
     for (let i = 0; i < touches.length; i++) {
+        let pointer = touchPointer(touches[i].identifier)
+                   || pointers.find((p, j) => j > 0 && !p.down);
+        if (pointer == null) {
+            pointer = new pointerPrototype();
+            pointers.push(pointer);
+        }
         let posX = scaleByPixelRatio(touches[i].pageX);
         let posY = scaleByPixelRatio(touches[i].pageY);
-        updatePointerDownData(pointers[i + 1], touches[i].identifier, posX, posY);
+        updatePointerDownData(pointer, touches[i].identifier, posX, posY);
     }
 });
 
 canvas.addEventListener('touchmove', e => {
     e.preventDefault();
-    const touches = e.targetTouches;
+    const touches = e.changedTouches;
     for (let i = 0; i < touches.length; i++) {
-        let pointer = pointers[i + 1];
-        if (!pointer.down) continue;
+        let pointer = touchPointer(touches[i].identifier);
+        if (pointer == null) continue;
         let posX = scaleByPixelRatio(touches[i].pageX);
         let posY = scaleByPixelRatio(touches[i].pageY);
         updatePointerMoveData(pointer, posX, posY);
     }
 }, false);
 
-window.addEventListener('touchend', e => {
+function releaseTouches (e) {
     const touches = e.changedTouches;
-    for (let i = 0; i < touches.length; i++)
-    {
-        let pointer = pointers.find(p => p.id == touches[i].identifier);
+    for (let i = 0; i < touches.length; i++) {
+        let pointer = touchPointer(touches[i].identifier);
         if (pointer == null) continue;
         updatePointerUpData(pointer);
     }
-});
+}
+
+window.addEventListener('touchend', releaseTouches);
+window.addEventListener('touchcancel', releaseTouches);
+
+// If the page loses focus mid-gesture, let go of everything so nothing stays stuck on
+window.addEventListener('blur', () => pointers.forEach(updatePointerUpData));
 
 window.addEventListener('keydown', e => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
@@ -2488,6 +2764,9 @@ window.addEventListener('keydown', e => {
         case 'KeyN': toggleMode('RAINBOW', 'Rainbow'); break;
         case 'KeyI': toggleMode('RANDOM_INJECTION', 'Random color on touch'); break;
         case 'KeyH': document.body.classList.toggle('hide-ui'); break;
+        case 'KeyG': cycleSetting('GESTURE', GESTURE_MODES, 'Gesture'); break;
+        case 'KeyJ': cycleSetting('INJECTION', INJECTION_MODES, 'Injection'); break;
+        case 'KeyX': cycleSetting('FORCE_FIELD', FORCE_FIELDS, 'Force field'); break;
         default: return;
     }
     refreshGUI();
@@ -2504,6 +2783,8 @@ function updatePointerDownData (pointer, id, posX, posY) {
     pointer.deltaX = 0;
     pointer.deltaY = 0;
     pointer.color = generateColor();
+    pointer.justDown = true;
+    pointer.heldTime = 0;
     queueInjection(pointer.texcoordX, pointer.texcoordY);
 }
 
@@ -2512,8 +2793,26 @@ function updatePointerMoveData (pointer, posX, posY) {
     pointer.prevTexcoordY = pointer.texcoordY;
     pointer.texcoordX = posX / canvas.width;
     pointer.texcoordY = 1.0 - posY / canvas.height;
-    pointer.deltaX = correctDeltaX(pointer.texcoordX - pointer.prevTexcoordX);
-    pointer.deltaY = correctDeltaY(pointer.texcoordY - pointer.prevTexcoordY);
+    let dx = correctDeltaX(pointer.texcoordX - pointer.prevTexcoordX);
+    let dy = correctDeltaY(pointer.texcoordY - pointer.prevTexcoordY);
+
+    // Sensitivity: low values ignore tiny jitters and soften response, high values amplify
+    const sens = config.TOUCH_SENSITIVITY / 100;
+    const deadZone = Math.max(0, 0.5 - sens) * 0.003;
+    const mag = Math.hypot(dx, dy);
+    if (mag <= deadZone) {
+        dx = 0;
+        dy = 0;
+    } else {
+        const k = pctScaleTo(config.TOUCH_SENSITIVITY) * (mag - deadZone) / mag;
+        dx *= k;
+        dy *= k;
+        pointer.dirX = dx / Math.hypot(dx, dy);
+        pointer.dirY = dy / Math.hypot(dx, dy);
+    }
+
+    pointer.deltaX = dx;
+    pointer.deltaY = dy;
     pointer.moved = Math.abs(pointer.deltaX) > 0 || Math.abs(pointer.deltaY) > 0;
 }
 
