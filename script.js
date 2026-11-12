@@ -135,6 +135,25 @@ let config = {
     BLUR: 0,
     SHARPEN: 0,
     COLOR_VARIATION: 0,
+    // Stage 4: particles
+    PARTICLES: false,
+    PARTICLE_MIX: 50,
+    PARTICLE_INTENSITY: 50,
+    PARTICLE_SPEED: 50,
+    PARTICLE_AMOUNT: 'Very High',
+    PARTICLE_STYLE: 'Glow',
+    PARTICLE_SIZE: 20,
+    PARTICLE_LENGTH: 40,
+    PARTICLE_DENSITY: 100,
+    PARTICLE_GLOW: 30,
+    PARTICLE_SPREAD: 100,
+    PARTICLE_TURBULENCE: 0,
+    PARTICLE_FADE: 30,
+    PARTICLE_ATTRACTION: 0,
+    PARTICLE_COLLISION: false,
+    PARTICLE_TRAILS: false,
+    PARTICLE_COLOR_MODE: 'Fluid Color',
+    PARTICLE_COLOR: { r: 120, g: 220, b: 255 },
 }
 
 
@@ -1011,6 +1030,662 @@ function cycleMirror () {
     if (config.MIRROR_MODE !== 'None') config.KALEIDOSCOPE = false;
 }
 
+// Stage 4: GPU particles
+
+const PARTICLE_AMOUNTS = {
+    'Very Low': 128, 'Low': 256, 'Medium': 512, 'High': 1024,
+    'Very High': 2048, 'Ultra': 4096, 'Extreme': 8192, 'Maximum': 16384,
+};
+const PARTICLE_STYLES = ['Points', 'Lines', 'Trails', 'Circles', 'Glow', 'Sparks', 'Bubbles', 'Dust', 'Orbs', 'Waves'];
+const PARTICLE_COLOR_MODES = ['Fluid Color', 'Single Color', 'Random', 'Velocity-Based', 'Rainbow', 'Gradient', 'Temperature-Based'];
+
+const particles = {
+    supported: null,     // decided on first use
+    floatType: null,
+    internalFormat: null,
+    programs: null,
+    state: null,         // double FBO: xy = position, z = age, w = seed
+    count: 0,
+    width: 0,
+    height: 0,
+    vertexBuffer: null,
+    density: null,
+    trail: null,
+    time: 0,
+    warned: false,
+};
+
+const PARTICLE_GLSL_COMMON = `
+    float phash (vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float pnoise (vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(phash(i), phash(i + vec2(1.0, 0.0)), u.x),
+                   mix(phash(i + vec2(0.0, 1.0)), phash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+
+    vec3 hsv2rgb (vec3 c) {
+        vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+        return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+    }
+`;
+
+const particleUpdateSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uState;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uDensity;
+    uniform vec2 velTexel;
+    uniform float dt;
+    uniform float time;
+    uniform float aspectRatio;
+    uniform float turbulence;
+    uniform float attraction;
+    uniform float collision;
+    uniform float lifetime;
+    uniform float spawnMode;
+    uniform vec2 spawnPoint;
+    uniform float spawnRadius;
+    uniform float wrapEdges;
+    uniform vec2 densityTexel;
+    ${PARTICLE_GLSL_COMMON}
+
+    void main () {
+        vec4 s = texture2D(uState, vUv);
+        vec2 p = s.xy;
+        float age = s.z;
+        float seed = s.w;
+
+        // Ride the fluid (velocity is stored in texels per second)
+        vec2 v = texture2D(uVelocity, p).xy * velTexel;
+
+        if (turbulence > 0.0) {
+            vec2 q = p * vec2(aspectRatio, 1.0) * 4.0 + vec2(time * 0.2, -time * 0.15) + seed * 0.3;
+            float e = 0.05;
+            float n1 = pnoise(q + vec2(0.0, e));
+            float n2 = pnoise(q - vec2(0.0, e));
+            float n3 = pnoise(q + vec2(e, 0.0));
+            float n4 = pnoise(q - vec2(e, 0.0));
+            v += vec2(n1 - n2, -(n3 - n4)) / (2.0 * e) * turbulence;
+        }
+
+        if (attraction > 0.0 || collision > 0.0) {
+            float dl = texture2D(uDensity, p - vec2(densityTexel.x, 0.0)).r;
+            float dr = texture2D(uDensity, p + vec2(densityTexel.x, 0.0)).r;
+            float db = texture2D(uDensity, p - vec2(0.0, densityTexel.y)).r;
+            float dtp = texture2D(uDensity, p + vec2(0.0, densityTexel.y)).r;
+            float here = texture2D(uDensity, p).r;
+            vec2 g = vec2(dr - dl, dtp - db);
+            // Attraction: drift toward crowds; Collision: push apart where crowded
+            v += g * attraction;
+            v -= g * collision * smoothstep(0.15, 0.5, here);
+        }
+
+        p += v * dt;
+        age += dt;
+
+        if (wrapEdges > 0.5) p = fract(p);
+
+        float life = lifetime * (0.6 + 0.8 * seed);
+        bool outside = p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0;
+        if (age > life || outside) {
+            float r1 = phash(vUv * 97.0 + vec2(time * 13.7, seed * 31.1));
+            float r2 = phash(vUv * 53.0 + vec2(seed * 17.3, time * 7.9));
+            if (spawnMode < 0.5) {
+                p = vec2(r1, r2);
+            } else {
+                float a = r1 * 6.2831853;
+                float rr = sqrt(r2) * spawnRadius;
+                p = clamp(spawnPoint + vec2(cos(a) * rr / aspectRatio, sin(a) * rr), 0.001, 0.999);
+            }
+            age = 0.0;
+        }
+
+        gl_FragColor = vec4(p, age, seed);
+    }
+`;
+
+const particleVertexSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    attribute float aVertex;
+    uniform sampler2D uState;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uDye;
+    uniform vec2 stateSize;
+    uniform float activeCount;
+    uniform vec2 velTexel;
+    uniform vec2 viewport;
+    uniform float size;
+    uniform float lengthScale;
+    uniform float style;
+    uniform float glow;
+    uniform float time;
+    uniform float lifetime;
+    uniform float colorMode;
+    uniform float rainbowHue;
+    uniform vec3 singleColor;
+    uniform vec3 pal0;
+    uniform vec3 pal1;
+    uniform vec3 pal2;
+    uniform vec3 pal3;
+    uniform vec3 pal4;
+
+    varying vec2 vLocal;
+    varying vec3 vColor;
+    varying float vAlpha;
+    varying float vSeed;
+    varying float vAspect;
+    ${PARTICLE_GLSL_COMMON}
+
+    vec3 paletteAt (float t) {
+        float f = fract(t) * 5.0;
+        if (f < 1.0) return mix(pal0, pal1, f);
+        if (f < 2.0) return mix(pal1, pal2, f - 1.0);
+        if (f < 3.0) return mix(pal2, pal3, f - 2.0);
+        if (f < 4.0) return mix(pal3, pal4, f - 3.0);
+        return mix(pal4, pal0, f - 4.0);
+    }
+
+    void main () {
+        float idx = floor(aVertex / 6.0 + 0.001);
+        float corner = aVertex - idx * 6.0;
+        if (idx >= activeCount) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+        }
+
+        vec2 suv = (vec2(mod(idx, stateSize.x), floor(idx / stateSize.x)) + 0.5) / stateSize;
+        vec4 s = texture2D(uState, suv);
+        vec2 p = s.xy;
+        float age = s.z;
+        float seed = s.w;
+
+        vec2 v = texture2D(uVelocity, p).xy * velTexel;
+        vec2 vpx = v * viewport;
+        float spd = length(vpx);
+        vec2 dir = spd > 0.001 ? vpx / spd : vec2(1.0, 0.0);
+        vec2 nrm = vec2(-dir.y, dir.x);
+
+        // Style-dependent footprint
+        float w = size;
+        float stretch = 0.0;
+        if (style > 0.5 && style < 2.5) { w = size * 0.6; stretch = spd * lengthScale; }   // Lines, Trails
+        else if (style > 3.5 && style < 4.5) { w = size * 3.0; }                            // Glow
+        else if (style > 4.5 && style < 5.5) { w = size * 0.5; stretch = spd * lengthScale * 0.6 + size; } // Sparks
+        else if (style > 5.5 && style < 6.5) { w = size * 2.2; }                            // Bubbles
+        else if (style > 6.5 && style < 7.5) { w = size * 0.6; }                            // Dust
+        else if (style > 7.5 && style < 8.5) { w = size * 2.6; }                            // Orbs
+        else if (style > 8.5) { w = size * 2.0; stretch = spd * lengthScale + size * 2.0; } // Waves
+
+        float gf = 1.0 + glow * 1.5;
+        float halfW = w * 0.5 * gf;
+        float halfL = (w * 0.5 + stretch * 0.5) * gf;
+
+        vec2 c;
+        if (corner < 0.5) c = vec2(-1.0, -1.0);
+        else if (corner < 1.5) c = vec2(1.0, -1.0);
+        else if (corner < 2.5) c = vec2(1.0, 1.0);
+        else if (corner < 3.5) c = vec2(-1.0, -1.0);
+        else if (corner < 4.5) c = vec2(1.0, 1.0);
+        else c = vec2(-1.0, 1.0);
+
+        vec2 centerPx = p * viewport - dir * stretch * 0.5;
+        vec2 posPx = centerPx + dir * c.x * halfL + nrm * c.y * halfW;
+        gl_Position = vec4(posPx / viewport * 2.0 - 1.0, 0.0, 1.0);
+
+        vLocal = c * gf;
+        vAspect = halfL / max(halfW, 0.001);
+        vSeed = seed;
+
+        // Color
+        vec3 dye = texture2D(uDye, p).rgb;
+        float dm = max(dye.r, max(dye.g, dye.b));
+        vec3 col;
+        if (colorMode < 0.5) {
+            col = mix(vec3(0.75), dye / max(dm, 0.001), smoothstep(0.0, 0.08, dm));
+        } else if (colorMode < 1.5) {
+            col = singleColor;
+        } else if (colorMode < 2.5) {
+            col = hsv2rgb(vec3(seed, 0.85, 1.0));
+        } else if (colorMode < 3.5) {
+            float t = clamp(spd / 700.0, 0.0, 1.0);
+            col = t < 0.5 ? mix(vec3(0.1, 0.25, 1.0), vec3(0.1, 0.95, 1.0), t * 2.0)
+                          : mix(vec3(0.1, 0.95, 1.0), vec3(1.0), (t - 0.5) * 2.0);
+        } else if (colorMode < 4.5) {
+            col = hsv2rgb(vec3(fract(rainbowHue + seed * 0.15 + p.x * 0.35), 0.9, 1.0));
+        } else if (colorMode < 5.5) {
+            col = paletteAt(seed);
+        } else {
+            float t = clamp(dm * 1.5 + spd / 1500.0, 0.0, 1.0);
+            col = t < 0.33 ? mix(vec3(0.25, 0.0, 0.0), vec3(1.0, 0.15, 0.0), t * 3.0)
+                : t < 0.66 ? mix(vec3(1.0, 0.15, 0.0), vec3(1.0, 0.8, 0.1), (t - 0.33) * 3.0)
+                           : mix(vec3(1.0, 0.8, 0.1), vec3(1.0), (t - 0.66) * 3.0);
+        }
+        vColor = col;
+
+        float life = lifetime * (0.6 + 0.8 * seed);
+        vAlpha = smoothstep(0.0, 0.15, age) * (1.0 - smoothstep(life * 0.7, life, age));
+    }
+`;
+
+const particleFragmentSource = `
+    precision highp float;
+
+    varying vec2 vLocal;
+    varying vec3 vColor;
+    varying float vAlpha;
+    varying float vSeed;
+    varying float vAspect;
+    uniform float style;
+    uniform float intensity;
+    uniform float glow;
+    uniform float time;
+    ${PARTICLE_GLSL_COMMON}
+
+    void main () {
+        // x runs along the direction of motion (head at +x), y across it
+        vec2 q = vLocal;
+        float d = length(q);
+        float a = 0.0;
+        vec3 col = vColor;
+
+        if (style < 0.5) {                 // Points
+            a = 1.0 - smoothstep(0.6, 1.0, d);
+        } else if (style < 1.5) {          // Lines: even streak
+            float along = 1.0 - smoothstep(0.85, 1.0, abs(q.x));
+            a = along * (1.0 - smoothstep(0.3, 1.0, abs(q.y)));
+        } else if (style < 2.5) {          // Trails: bright head, fading tail
+            float along = smoothstep(-1.0, 0.9, q.x) * (1.0 - smoothstep(0.9, 1.0, q.x));
+            a = along * along * (1.0 - smoothstep(0.4, 1.0, abs(q.y)));
+        } else if (style < 3.5) {          // Circles: rings
+            a = smoothstep(0.55, 0.7, d) * (1.0 - smoothstep(0.85, 1.0, d));
+        } else if (style < 4.5) {          // Glow: soft light
+            a = exp(-d * d * 3.5);
+        } else if (style < 5.5) {          // Sparks: sharp tapered streaks that flicker
+            float taper = 1.0 - abs(q.x);
+            a = taper * (1.0 - smoothstep(0.0, 0.6 * taper + 0.05, abs(q.y)));
+            a *= 0.6 + 0.8 * phash(vec2(vSeed * 91.0, floor(time * 24.0)));
+            col = mix(col, vec3(1.0), 0.45);
+        } else if (style < 6.5) {          // Bubbles: thin rim, highlight, faint body
+            float rim = smoothstep(0.72, 0.88, d) * (1.0 - smoothstep(0.92, 1.0, d));
+            float hl = exp(-dot(q - vec2(-0.35, 0.35), q - vec2(-0.35, 0.35)) * 40.0);
+            a = rim * 0.9 + hl * 0.9 + (1.0 - smoothstep(0.85, 1.0, d)) * 0.07;
+            col = mix(col, vec3(1.0), hl * 0.8);
+        } else if (style < 7.5) {          // Dust: tiny, dim, twinkling
+            a = (1.0 - smoothstep(0.3, 1.0, d)) * 0.45;
+            a *= 0.5 + 0.5 * sin(time * 3.0 + vSeed * 40.0);
+        } else if (style < 8.5) {          // Orbs: shaded spheres with a highlight
+            float z = sqrt(max(1.0 - d * d, 0.0));
+            float shade = 0.35 + 0.65 * clamp(dot(normalize(vec3(q.x, q.y, z + 1e-4)), normalize(vec3(-0.4, 0.5, 0.8))), 0.0, 1.0);
+            float spec = pow(clamp(dot(normalize(vec3(q.x, q.y, z + 1e-4)), normalize(vec3(-0.3, 0.4, 1.0))), 0.0, 1.0), 30.0);
+            a = 1.0 - smoothstep(0.92, 1.0, d);
+            col = col * shade + vec3(spec);
+        } else {                           // Waves: wavy ribbons
+            float y = q.y - 0.45 * sin(q.x * vAspect * 3.1416 + time * 6.0 + vSeed * 20.0);
+            float along = 1.0 - smoothstep(0.8, 1.0, abs(q.x));
+            a = along * (1.0 - smoothstep(0.08, 0.3, abs(y)));
+        }
+
+        // Halo around the core (Particle Glow)
+        float halo = glow * exp(-d * d * 1.2) * 0.6;
+
+        float alpha = (a + halo) * vAlpha;
+        gl_FragColor = vec4(col * alpha * intensity, alpha);
+    }
+`;
+
+const particleDensityVertexSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    attribute float aVertex;
+    uniform sampler2D uState;
+    uniform vec2 stateSize;
+    uniform float activeCount;
+
+    void main () {
+        float idx = floor(aVertex / 6.0 + 0.001);
+        float corner = aVertex - idx * 6.0;
+        // One point per particle: only the first vertex of each quad is used
+        if (idx >= activeCount || corner > 0.5) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            gl_PointSize = 1.0;
+            return;
+        }
+        vec2 suv = (vec2(mod(idx, stateSize.x), floor(idx / stateSize.x)) + 0.5) / stateSize;
+        vec2 p = texture2D(uState, suv).xy;
+        gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        gl_PointSize = 2.0;
+    }
+`;
+
+const particleDensityFragmentSource = `
+    precision mediump float;
+    uniform float amount;
+
+    void main () {
+        gl_FragColor = vec4(amount, 0.0, 0.0, 1.0);
+    }
+`;
+
+const trailFadeSource = `
+    precision mediump float;
+    precision mediump sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uTexture;
+    uniform float keep;
+
+    void main () {
+        // The small subtraction stops 8-bit trails from leaving permanent ghosts
+        vec4 c = texture2D(uTexture, vUv) * keep - vec4(1.5 / 255.0);
+        gl_FragColor = max(c, 0.0);
+    }
+`;
+
+function linkParticleProgram (vsSource, fsSource) {
+    const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.bindAttribLocation(program, 0, 'aVertex');
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+        console.trace(gl.getProgramInfoLog(program));
+    return { program, uniforms: getUniforms(program), bind () { gl.useProgram(program); } };
+}
+
+// Particles need float textures we can render into, and texture reads in the vertex shader
+function detectParticleSupport () {
+    if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < 2) return false;
+    let internalFormat, type;
+    if (isWebGL2Context) {
+        if (!gl.getExtension('EXT_color_buffer_float')) return false;
+        internalFormat = gl.RGBA32F;
+        type = gl.FLOAT;
+    } else {
+        if (!gl.getExtension('OES_texture_float')) return false;
+        gl.getExtension('WEBGL_color_buffer_float');
+        internalFormat = gl.RGBA;
+        type = gl.FLOAT;
+    }
+    const test = createFBO(4, 4, internalFormat, gl.RGBA, type, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, test.fbo);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.deleteFramebuffer(test.fbo);
+    gl.deleteTexture(test.texture);
+    particles.internalFormat = internalFormat;
+    particles.floatType = type;
+    return ok;
+}
+
+function particleStateSize (count) {
+    const w = 1 << Math.ceil(Math.log2(Math.sqrt(count)));
+    return { w, h: Math.ceil(count / w) };
+}
+
+function createParticleTexture (w, h, data) {
+    gl.activeTexture(gl.TEXTURE0);
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, particles.internalFormat, w, h, 0, gl.RGBA, particles.floatType, data);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    return {
+        texture, fbo, width: w, height: h, texelSizeX: 1 / w, texelSizeY: 1 / h,
+        attach (id) {
+            gl.activeTexture(gl.TEXTURE0 + id);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            return id;
+        }
+    };
+}
+
+function setupParticles () {
+    const count = PARTICLE_AMOUNTS[config.PARTICLE_AMOUNT] || 1024;
+    if (particles.state && particles.count === count) return;
+
+    const { w, h } = particleStateSize(count);
+    const data = new Float32Array(w * h * 4);
+    const life = particleLifetime();
+    for (let i = 0; i < w * h; i++) {
+        const seed = Math.random();
+        data[i * 4 + 0] = Math.random();
+        data[i * 4 + 1] = Math.random();
+        data[i * 4 + 2] = Math.random() * life * (0.6 + 0.8 * seed);  // staggered ages
+        data[i * 4 + 3] = seed;
+    }
+    const a = createParticleTexture(w, h, data);
+    const b = createParticleTexture(w, h, data);
+    if (particles.state) {
+        [particles.state.read, particles.state.write].forEach(f => {
+            gl.deleteFramebuffer(f.fbo);
+            gl.deleteTexture(f.texture);
+        });
+    }
+    particles.state = {
+        read: a, write: b,
+        swap () { const t = this.read; this.read = this.write; this.write = t; }
+    };
+    particles.count = count;
+    particles.width = w;
+    particles.height = h;
+
+    const verts = new Float32Array(w * h * 6);
+    for (let i = 0; i < verts.length; i++) verts[i] = i;
+    if (!particles.vertexBuffer) particles.vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, particles.vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    blit.restore();
+}
+
+function ensureParticleTargets () {
+    if (!particles.density) {
+        const res = getResolution(64);
+        particles.density = createFBO(res.width, res.height, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
+    }
+    const tw = Math.max(1, gl.drawingBufferWidth >> 1), th = Math.max(1, gl.drawingBufferHeight >> 1);
+    if (config.PARTICLE_TRAILS && (!particles.trail || particles.trail.read.width !== tw || particles.trail.read.height !== th))
+        particles.trail = createDoubleFBO(tw, th, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
+}
+
+function particlesReady () {
+    if (!config.PARTICLES) return false;
+    if (particles.supported === null) {
+        particles.supported = detectParticleSupport();
+        if (particles.supported) {
+            particles.programs = {
+                update: new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, particleUpdateSource)),
+                draw: linkParticleProgram(particleVertexSource, particleFragmentSource),
+                density: linkParticleProgram(particleDensityVertexSource, particleDensityFragmentSource),
+                fade: new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, trailFadeSource)),
+            };
+        }
+    }
+    if (!particles.supported) {
+        if (!particles.warned) {
+            particles.warned = true;
+            showToast('Particles are not supported on this device');
+        }
+        return false;
+    }
+    setupParticles();
+    ensureParticleTargets();
+    return true;
+}
+
+function particleLifetime () {
+    return 12 - config.PARTICLE_FADE / 100 * 11.6;   // 0% = 12 s, 100% = 0.4 s
+}
+
+function particleActiveCount () {
+    return Math.max(1, Math.round(particles.count * config.PARTICLE_DENSITY / 100));
+}
+
+function drawParticleQuads (program, mode, count) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, particles.vertexBuffer);
+    gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(0);
+    gl.drawArrays(mode, 0, count * 6);
+    blit.restore();
+}
+
+function updateParticles (dt) {
+    if (!particlesReady()) return;
+    particles.time += dt;
+    const step = config.PAUSED ? 0 : dt * pctSpeedTo(config.PARTICLE_SPEED);
+    const active = particleActiveCount();
+
+    const needDensity = config.PARTICLE_ATTRACTION > 0 || config.PARTICLE_COLLISION;
+    if (needDensity) {
+        const d = particles.programs.density;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, particles.density.fbo);
+        gl.viewport(0, 0, particles.density.width, particles.density.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        d.bind();
+        gl.uniform1i(d.uniforms.uState, particles.state.read.attach(0));
+        gl.uniform2f(d.uniforms.stateSize, particles.width, particles.height);
+        gl.uniform1f(d.uniforms.activeCount, active);
+        // Normalize so an even spread gives about the same density at any amount
+        const cells = particles.density.width * particles.density.height;
+        gl.uniform1f(d.uniforms.amount, Math.min(0.25, 0.08 * cells / active));
+        drawParticleQuads(d, gl.POINTS, active);
+        gl.disable(gl.BLEND);
+    }
+
+    // Spawn around the first finger when Spread is below 100%
+    const spread = config.PARTICLE_SPREAD / 100;
+    const finger = pointers.find(p => p.down);
+    const spawnAround = spread < 0.999;
+    const sp = finger ? [finger.texcoordX, finger.texcoordY] : [0.5, 0.5];
+
+    const u = particles.programs.update;
+    gl.disable(gl.BLEND);
+    u.bind();
+    gl.uniform1i(u.uniforms.uState, particles.state.read.attach(0));
+    gl.uniform1i(u.uniforms.uVelocity, velocity.read.attach(1));
+    gl.uniform1i(u.uniforms.uDensity, particles.density.attach(2));
+    gl.uniform2f(u.uniforms.velTexel, velocity.texelSizeX, velocity.texelSizeY);
+    gl.uniform2f(u.uniforms.densityTexel, particles.density.texelSizeX * 1.5, particles.density.texelSizeY * 1.5);
+    gl.uniform1f(u.uniforms.dt, step);
+    gl.uniform1f(u.uniforms.time, particles.time);
+    gl.uniform1f(u.uniforms.aspectRatio, canvas.width / canvas.height);
+    gl.uniform1f(u.uniforms.turbulence, config.PARTICLE_TURBULENCE / 100 * 0.08);
+    gl.uniform1f(u.uniforms.attraction, config.PARTICLE_ATTRACTION / 100 * 0.6);
+    gl.uniform1f(u.uniforms.collision, config.PARTICLE_COLLISION ? 1.2 : 0);
+    gl.uniform1f(u.uniforms.lifetime, particleLifetime());
+    gl.uniform1f(u.uniforms.spawnMode, spawnAround ? 1 : 0);
+    gl.uniform2f(u.uniforms.spawnPoint, sp[0], sp[1]);
+    gl.uniform1f(u.uniforms.spawnRadius, 0.03 + spread * 0.7);
+    gl.uniform1f(u.uniforms.wrapEdges, effectiveEdgeMode() === 1 ? 1 : 0);
+    blit(particles.state.write);
+    particles.state.swap();
+}
+
+function particleColors () {
+    const c = config.PARTICLE_COLOR;
+    const pal = [0, 0.2, 0.4, 0.6, 0.8].map(u => samplePalette(u));
+    return { single: [c.r / 255, c.g / 255, c.b / 255], pal };
+}
+
+function setParticleDrawUniforms (u, width, height) {
+    const dpr = window.devicePixelRatio || 1;
+    const colors = particleColors();
+    gl.uniform1i(u.uState, particles.state.read.attach(0));
+    gl.uniform1i(u.uVelocity, velocity.read.attach(1));
+    gl.uniform1i(u.uDye, dye.read.attach(2));
+    gl.uniform2f(u.stateSize, particles.width, particles.height);
+    gl.uniform1f(u.activeCount, particleActiveCount());
+    gl.uniform2f(u.velTexel, velocity.texelSizeX, velocity.texelSizeY);
+    gl.uniform2f(u.viewport, width, height);
+    gl.uniform1f(u.size, (1 + 23 * Math.pow(config.PARTICLE_SIZE / 100, 1.5)) * dpr * (width / Math.max(gl.drawingBufferWidth, 1)));
+    gl.uniform1f(u.lengthScale, config.PARTICLE_LENGTH / 100 * 0.12);
+    gl.uniform1f(u.style, PARTICLE_STYLES.indexOf(config.PARTICLE_STYLE));
+    gl.uniform1f(u.glow, config.PARTICLE_GLOW / 100);
+    gl.uniform1f(u.time, particles.time);
+    gl.uniform1f(u.lifetime, particleLifetime());
+    gl.uniform1f(u.colorMode, PARTICLE_COLOR_MODES.indexOf(config.PARTICLE_COLOR_MODE));
+    gl.uniform1f(u.rainbowHue, rainbowHue);
+    gl.uniform3f(u.singleColor, colors.single[0], colors.single[1], colors.single[2]);
+    ['pal0', 'pal1', 'pal2', 'pal3', 'pal4'].forEach((k, i) => gl.uniform3f(u[k], colors.pal[i].r, colors.pal[i].g, colors.pal[i].b));
+    gl.uniform1f(u.intensity, config.PARTICLE_INTENSITY / 50 * particleMixAmount());
+}
+
+// Draws particles additively on top of the fluid in `target`
+function renderParticles (target) {
+    if (!config.PARTICLES || !particles.supported || !particles.state) return;
+    const draw = particles.programs.draw;
+    const width = target == null ? gl.drawingBufferWidth : target.width;
+    const height = target == null ? gl.drawingBufferHeight : target.height;
+
+    if (config.PARTICLE_TRAILS && particles.trail && (target == null || target === frameFBO)) {
+        // Fade the trail buffer, add this frame's particles, then lay it over the scene
+        const t = particles.trail;
+        gl.disable(gl.BLEND);
+        particles.programs.fade.bind();
+        gl.uniform1i(particles.programs.fade.uniforms.uTexture, t.read.attach(0));
+        gl.uniform1f(particles.programs.fade.uniforms.keep, config.PAUSED ? 1 : 0.9);
+        blit(t.write);
+        t.swap();
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, t.read.fbo);
+        gl.viewport(0, 0, t.read.width, t.read.height);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        draw.bind();
+        setParticleDrawUniforms(draw.uniforms, t.read.width, t.read.height);
+        drawParticleQuads(draw, gl.TRIANGLES, particleActiveCount());
+
+        copyProgram.bind();
+        gl.uniform1i(copyProgram.uniforms.uTexture, t.read.attach(0));
+        blit(target);
+    } else {
+        if (target == null) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, width, height);
+        } else {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+            gl.viewport(0, 0, width, height);
+        }
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        draw.bind();
+        setParticleDrawUniforms(draw.uniforms, width, height);
+        drawParticleQuads(draw, gl.TRIANGLES, particleActiveCount());
+    }
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+}
+
+// Mix: 0% = only fluid, 50% = both at full strength, 100% = only particles
+function fluidAmount () {
+    if (!config.PARTICLES || !particles.supported) return 1;
+    return Math.min(1, 2 - 2 * config.PARTICLE_MIX / 100);
+}
+
+function particleMixAmount () {
+    return Math.min(1, 2 * config.PARTICLE_MIX / 100);
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -1226,6 +1901,26 @@ function startGUI () {
     filtersFolder.add(config, 'BLUR', 0, 100).step(1).name('blur');
     filtersFolder.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
     filtersFolder.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
+
+    let particlesFolder = gui.addFolder('Particles');
+    particlesFolder.add(config, 'PARTICLES').name('particles').listen();
+    particlesFolder.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix');
+    particlesFolder.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('intensity');
+    particlesFolder.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
+    particlesFolder.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
+    particlesFolder.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style').listen();
+    particlesFolder.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
+    particlesFolder.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('length');
+    particlesFolder.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
+    particlesFolder.add(config, 'PARTICLE_GLOW', 0, 100).step(1).name('glow');
+    particlesFolder.add(config, 'PARTICLE_SPREAD', 0, 100).step(1).name('spread');
+    particlesFolder.add(config, 'PARTICLE_TURBULENCE', 0, 100).step(1).name('turbulence');
+    particlesFolder.add(config, 'PARTICLE_FADE', 0, 100).step(1).name('fade');
+    particlesFolder.add(config, 'PARTICLE_ATTRACTION', 0, 100).step(1).name('attraction');
+    particlesFolder.add(config, 'PARTICLE_COLLISION').name('collision');
+    particlesFolder.add(config, 'PARTICLE_TRAILS').name('trails');
+    particlesFolder.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
+    particlesFolder.addColor(config, 'PARTICLE_COLOR').name('single color');
 
     let captureFolder = gui.addFolder('Capture');
     captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
@@ -1553,6 +2248,7 @@ const displayShaderSource = `
     uniform vec3 uvColor;
     uniform vec3 envTop;
     uniform vec3 envBottom;
+    uniform float fluidAmount;
 
     #if defined(SHADING) || defined(SPECULAR) || defined(REFRACTION) || defined(REFLECTION) || defined(DEPTH) || defined(BLACKLIGHT)
     #define NEEDS_NORMAL
@@ -1634,7 +2330,7 @@ const displayShaderSource = `
         uv += n.xy * refraction;
     #endif
 
-        vec3 c = texture2D(uTexture, uv).rgb;
+        vec3 c = texture2D(uTexture, uv).rgb * fluidAmount;
         float presence = clamp(maxc(c) * 3.0, 0.0, 1.0);
 
     #ifdef SHADING
@@ -1663,7 +2359,7 @@ const displayShaderSource = `
     #endif
 
     #if defined(BLOOM) || defined(FLARE)
-        vec3 bloom = texture2D(uBloom, vUv).rgb;
+        vec3 bloom = texture2D(uBloom, vUv).rgb * fluidAmount;
     #endif
 
     #ifdef SUNRAYS
@@ -2495,14 +3191,16 @@ const gradientSubtractShader = compileShader(gl.FRAGMENT_SHADER, `
 `);
 
 const blit = (() => {
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    const quadBuffer = gl.createBuffer();
+    const indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(0);
 
-    return (target, clear = false) => {
+    const fn = (target, clear = false) => {
         if (target == null)
         {
             gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -2520,7 +3218,17 @@ const blit = (() => {
         }
         // CHECK_FRAMEBUFFER_STATUS();
         gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-    }
+    };
+
+    // Particles draw from their own buffer; this puts the fullscreen quad back
+    fn.restore = () => {
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(0);
+    };
+
+    return fn;
 })();
 
 function CHECK_FRAMEBUFFER_STATUS () {
@@ -2796,6 +3504,7 @@ function update () {
         for (let i = 0; i < substeps; i++)
             step(simDt / substeps);
     }
+    updateParticles(dt);
     render(null, dt);
     syncToolbar();
     requestAnimationFrame(update);
@@ -3027,6 +3736,7 @@ function render (target, dt) {
     if (target == null && config.TRANSPARENT)
         drawCheckerboard(dest);
     drawDisplay(dest);
+    renderParticles(dest);
 
     if (usePost)
         runPost(dt || 0.016);
@@ -3092,6 +3802,7 @@ function drawDisplay (target) {
     gl.uniform3f(u.uvColor, uv ? uv[0] : 0, uv ? uv[1] : 0, uv ? uv[2] : 0);
     gl.uniform3f(u.envTop, 0.55, 0.65, 0.85);
     gl.uniform3f(u.envBottom, 0.06, 0.05, 0.08);
+    gl.uniform1f(u.fluidAmount, fluidAmount());
     blit(target);
 }
 
@@ -3303,6 +4014,8 @@ window.addEventListener('keydown', e => {
         case 'KeyG': cycleSetting('GESTURE', GESTURE_MODES, 'Gesture'); break;
         case 'KeyJ': cycleSetting('INJECTION', INJECTION_MODES, 'Injection'); break;
         case 'KeyX': cycleSetting('FORCE_FIELD', FORCE_FIELDS, 'Force field'); break;
+        case 'KeyO': toggleMode('PARTICLES', 'Particles'); break;
+        case 'KeyL': cycleSetting('PARTICLE_STYLE', PARTICLE_STYLES, 'Particle style'); break;
         default: return;
     }
     refreshGUI();

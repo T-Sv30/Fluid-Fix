@@ -29,7 +29,7 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Random color on touch | Each new touch injects a burst of random colors | I |
 | Auto transitions | Smoothly crossfades to the next palette every few seconds | |
 
-Space adds random splats, H hides the toolbar and panel, and G / J / X cycle the gesture mode, injection mode and force field.
+Space adds random splats, H hides the toolbar and panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles and L cycles the particle style.
 
 ## Settings
 
@@ -45,7 +45,10 @@ Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value
 - **Effects:** shading, bloom, flare (Soft, Sharp, Radial, Cinematic), sunrays, gamma (Standard, Bright, Dark, Cinematic), specular highlights (Soft, Glossy, Sharp), mirror, glow intensity and radius, refraction (glass-like distortion), reflection, transparency, depth (relief lighting and a drop shadow)
 - **Blacklight:** blacklight mode, intensity, fluorescence (brightness and glowing edges), UV color mode (Neon Blue, Electric Purple, Fluorescent Pink, Toxic Green, Neon Orange, Ultraviolet, Cyan, Full Spectrum)
 - **Filters:** pixels (2×–16×), neon outlines, emboss, lens fringe, film filter (warm grade, vignette, grain), saturation and contrast (50% = unchanged), invert, shake (follows how hard you stir; Subtle, Normal, Strong), motion echoes (Smooth, Fluid, Dramatic) with intensity, chromatic aberration, blur, sharpen, color variation
+- **Particles:** particles, mix (0% = fluid only, 50% = both, 100% = particles only), intensity, speed, amount (128 to 16,384), style (Points, Lines, Trails, Circles, Glow, Sparks, Bubbles, Dust, Orbs, Waves), size, length (streak length for moving particles), density (share of particles shown), glow (halo), spread (100% = whole screen, lower = spawn around your finger), turbulence, fade (how quickly each particle disappears), attraction (particles drift toward each other), collision (crowded particles push apart), trails, color mode (Fluid Color, Single Color, Random, Velocity-Based, Rainbow, Gradient from the current palette, Temperature-Based), single color
 - **Modes, Colors, Capture**
+
+Particles run entirely on the GPU and ride the fluid's velocity. They need float textures (WebGL2 on nearly all current phones); devices without them show a message instead.
 
 Screen filters only run while at least one is switched on, so they cost nothing when off. Screenshots capture the fluid without screen filters.
 
