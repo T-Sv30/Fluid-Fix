@@ -588,7 +588,7 @@ if (!ext.supportLinearFiltering) {
 // Every slider in the UI is 0-100%. These map a percentage to the engine value and back.
 const pctSpeedTo = p => p <= 50 ? p / 50 : 1 + (p - 50) / 25;          // 0..1x..3x, 50% = 1x
 const pctSpeedFrom = v => v <= 1 ? v * 50 : 50 + (v - 1) * 25;
-// Time: seconds for color to fade 95% of the way out. 0% = 0.2 s, 100% = 3 s.
+// Dissipation: seconds for color to fade 95% of the way out. 0% = 0.2 s, 100% = 3 s.
 // The dye fades exponentially at rate d, so that takes ln(20) / d seconds.
 const FADE_LN = Math.log(20);
 const fadeSeconds = p => 0.2 + 2.8 * p / 100;
@@ -600,10 +600,9 @@ const pctLinTo = (min, max) => p => min + (max - min) * p / 100;
 const pctLinFrom = (min, max) => v => 100 * (v - min) / (max - min);
 
 const PCT = {
-    TIME:            { cfg: 'DENSITY_DISSIPATION',  to: pctFadeTo,           from: pctFadeFrom },
     SPEED:           { cfg: 'SPEED',                to: pctSpeedTo,          from: pctSpeedFrom },
     RADIUS:          { cfg: 'SPLAT_RADIUS',         to: pctLinTo(0.01, 1),   from: pctLinFrom(0.01, 1) },
-    DISSIPATION:     { cfg: 'DENSITY_DISSIPATION',  to: pctSquareTo(4),      from: pctSquareFrom(4) },
+    DISSIPATION:     { cfg: 'DENSITY_DISSIPATION',  to: pctFadeTo,           from: pctFadeFrom },
     DRAG:            { cfg: 'VELOCITY_DISSIPATION', to: pctSquareTo(4),      from: pctSquareFrom(4) },
     VORTICITY:       { cfg: 'CURL',                 to: pctLinTo(0, 50),     from: pctLinFrom(0, 50) },
     PRESSURE_STR:    { cfg: 'PRESSURE',             to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
@@ -1114,7 +1113,6 @@ function startGUI () {
 
     let simFolder = gui.addFolder('Simulation');
     simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
-    addPct(simFolder, 'TIME', 'time (0.2–3 s fade)');
     addPct(simFolder, 'SPEED', 'speed');
     simFolder.add(config, 'AUTOPLAY').name('autoplay').listen();
     addPct(simFolder, 'RADIUS', 'radius');

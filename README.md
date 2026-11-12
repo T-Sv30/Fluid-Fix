@@ -22,7 +22,7 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Color trails | Dye fades about 8× slower, leaving long trails | T |
 | Blacklight | Fluorescent colors under UV light, with intensity, fluorescence and 8 UV color modes | B |
 | Background presets | Black, Midnight, Nebula, Deep Ocean, Ember, Forest, Charcoal, Paper, Custom (crossfades) | |
-| Time | How long color takes to fade away: 0% = 0.2 s, 100% = 3 s | |
+| Dissipation | How long color takes to fade away: 0% = 0.2 s, 100% = 3 s | |
 | Speed | Simulation speed: 0% stopped, 50% normal, 100% = 3× (sub-stepped to stay stable) | |
 | Touch force | Strength of every touch and emitter: 50% normal, 100% = 3× | |
 | Freeze / resume | Stops the motion; you can still paint on the frozen image | F or P |
@@ -35,7 +35,7 @@ Space adds random splats, H hides the toolbar and panel, and G / J / X cycle the
 
 Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value. The panel is grouped like this:
 
-- **Simulation:** quality (Very Low → Ultra High), time (fade duration), speed, autoplay, radius, sim resolution, dissipation, viscosity, vorticity, gravity, pressure (Low / Norm / Max)
+- **Simulation:** quality (Very Low → Ultra High), speed, autoplay, radius, sim resolution, dissipation (fade time), viscosity, vorticity, gravity, pressure (Low / Norm / Max)
 - **Forces:** turbulence (animated curl noise), flow strength, swirl, pressure strength, buoyancy (50% = neutral, lower sinks, higher rises), drag, elasticity (springy wobble), flow direction (8 directions, radial outward/inward, circular), flow speed, randomness
 - **Edges:** Wall, Wrap (fluid leaving one side comes back on the other; needs WebGL2), Void (fluid flows out and vanishes), Repel; plus repel strength, repel distance, edge friction, edge bounce, edge softness, and corner behavior (Normal, Rounded, Repel, Bounce, Absorb, Wrap)
 - **Touch:** touch force, touch radius, touch attraction, touch repulsion, multi-touch strength (applies while 2+ fingers are down), continuous drawing (keeps adding color while a finger is held still), touch sensitivity (below 50% ignores tiny jitters, above 50% amplifies movement), gesture mode, injection mode
