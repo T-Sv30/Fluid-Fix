@@ -86,6 +86,141 @@
                 transform: translate(-50%, 0);
             }
 
+            /* Dialog */
+
+            [hidden] {
+                display: none !important;
+            }
+
+            .modal {
+                position: fixed;
+                inset: 0;
+                z-index: 20;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 16px;
+                box-sizing: border-box;
+                background: rgba(0, 0, 0, 0.55);
+                -webkit-backdrop-filter: blur(6px);
+                backdrop-filter: blur(6px);
+                animation: modal-fade 0.18s ease-out;
+                user-select: text;
+            }
+
+            .modal * {
+                user-select: text;
+            }
+
+            .modal-card {
+                width: 100%;
+                max-width: 440px;
+                max-height: calc(100vh - 32px);
+                overflow: auto;
+                box-sizing: border-box;
+                padding: 20px;
+                border-radius: 18px;
+                background: rgba(22, 22, 30, 0.92);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+                color: #f2f2f7;
+                font: 400 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                animation: modal-rise 0.22s ease-out;
+            }
+
+            .modal-card h2 {
+                margin: 0 0 6px;
+                font-size: 17px;
+                font-weight: 650;
+            }
+
+            .modal-card p {
+                margin: 0 0 12px;
+                color: rgba(242, 242, 247, 0.75);
+            }
+
+            .modal-card textarea {
+                display: block;
+                width: 100%;
+                min-height: 120px;
+                box-sizing: border-box;
+                padding: 10px 12px;
+                border-radius: 10px;
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                background: rgba(0, 0, 0, 0.35);
+                color: #fff;
+                font: 13px/1.4 "SFMono-Regular", Menlo, Consolas, monospace;
+                resize: vertical;
+            }
+
+            .modal-card textarea:focus {
+                outline: 2px solid rgba(120, 170, 255, 0.7);
+                outline-offset: 1px;
+            }
+
+            .modal-file {
+                display: block;
+                margin-top: 10px;
+                color: rgba(242, 242, 247, 0.75);
+                font-size: 13px;
+                max-width: 100%;
+            }
+
+            .modal-error {
+                min-height: 1em;
+                margin: 8px 0 0;
+                color: #ff8a8a;
+                font-size: 13px;
+            }
+
+            .modal-actions {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+                gap: 8px;
+                margin-top: 14px;
+            }
+
+            .modal-btn {
+                appearance: none;
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                background: rgba(255, 255, 255, 0.06);
+                color: #fff;
+                padding: 9px 16px;
+                border-radius: 10px;
+                font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                cursor: pointer;
+            }
+
+            .modal-btn:hover {
+                background: rgba(255, 255, 255, 0.12);
+            }
+
+            .modal-btn.primary {
+                border-color: transparent;
+                background: linear-gradient(135deg, #7c3aed, #0ea5e9);
+            }
+
+            .modal-btn.danger {
+                border-color: transparent;
+                background: #dc2626;
+            }
+
+            .modal-btn:focus-visible {
+                outline: 2px solid rgba(160, 200, 255, 0.9);
+                outline-offset: 2px;
+            }
+
+            @keyframes modal-fade {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+
+            @keyframes modal-rise {
+                from { transform: translateY(12px) scale(0.98); opacity: 0; }
+                to { transform: none; opacity: 1; }
+            }
+
             body.hide-ui .dg.ac {
                 opacity: 0;
                 pointer-events: none;
@@ -99,6 +234,17 @@
         <canvas></canvas>
 
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+        <div class="modal" id="modal" hidden>
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+                <h2 id="modal-title"></h2>
+                <p id="modal-text"></p>
+                <textarea id="modal-input" spellcheck="false" hidden></textarea>
+                <input class="modal-file" id="modal-file" type="file" accept=".json,application/json,text/plain" hidden>
+                <p class="modal-error" id="modal-error" role="alert"></p>
+                <div class="modal-actions" id="modal-actions"></div>
+            </div>
+        </div>
 
 
         <script src="./script.js"></script>

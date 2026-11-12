@@ -8,7 +8,7 @@ An interactive WebGL fluid simulation that runs in desktop and mobile browsers. 
 
 ## Features
 
-Everything is in the controls panel (top right). Its top rows give one-tap access to **Randomize**, **Freeze / Resume**, **Next palette**, **Auto-play** and **Vortex**.
+Everything is in the controls panel (top right). Its top rows give one-tap access to **Randomize**, **Freeze / Resume**, **Next palette**, **Auto-play**, **Vortex**, **Random splats**, **Clear fluid**, **Undo**, **Redo**, **Screenshot** and **Fullscreen**.
 
 | Feature | What it does | Key |
 |---|---|---|
@@ -35,6 +35,7 @@ Space adds random splats, H hides the controls panel, G / J / X cycle the gestur
 
 Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value. The panel is grouped like this:
 
+- **Presets:** choose a preset (six built in: Default, Aurora Dream, Lava Lamp, Neon Party, Ink on Paper, Starry Galaxy), rename it, save, new, clone, random, export (copy, share or download as JSON), load (paste or open a JSON file), delete, and reset simulation. Presets are saved on this device, and the last one you used opens next time. Undo and redo (also Ctrl+Z / Ctrl+Shift+Z) step through settings changes.
 - **Simulation → simulation mode:** one-tap scenes built from the forces below. Each sets its own forces, fields and edges, and most keep the scene moving on their own:
   - **Standard Fluid** (resets those forces), **Vortex**, **Whirlpool** (color pours in at the rim and drains in the middle), **Tornado** (a rising, twisting column), **Explosion** (periodic bursts), **Fountain** (a jet that arcs and falls), **Waterfall** (falls off the top and out the bottom), **Waves** (a traveling sine ribbon), **Orbit** (planets on Kepler-style orbits), **Magnetic** (color streams along field lines between two poles), **Plasma** (crackling arcs in turbulence), **Galaxy** (two spiral arms around a bright core), **Black Hole** (clouds spiral in and vanish), **Reverse Flow** (fluid moves against your finger)
 - **Simulation:** quality (Very Low → Ultra High), speed, autoplay, radius, sim resolution, dissipation (fade time), viscosity, vorticity, gravity, pressure (Low / Norm / Max)
@@ -49,6 +50,9 @@ Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value
 - **Filters:** pixels (2×–16×), neon outlines, emboss, lens fringe, film filter (warm grade, vignette, grain), saturation and contrast (50% = unchanged), invert, shake (follows how hard you stir; Subtle, Normal, Strong), motion echoes (Smooth, Fluid, Dramatic) with intensity, chromatic aberration, blur, sharpen, color variation
 - **Particles:** particles, mix (0% = fluid only, 50% = both, 100% = particles only), intensity, speed, amount (128 to 16,384), style (Points, Lines, Trails, Circles, Glow, Sparks, Bubbles, Dust, Orbs, Waves), size, length (streak length for moving particles), density (share of particles shown), glow (halo), spread (100% = whole screen, lower = spawn around your finger), turbulence, fade (how quickly each particle disappears), attraction (particles drift toward each other), collision (crowded particles push apart), trails, color mode (Fluid Color, Single Color, Random, Velocity-Based, Rainbow, Gradient from the current palette, Temperature-Based), single color
 - **Performance:** performance mode (Battery Saver, Balanced, Performance, Maximum Performance presets), frame rate limit (15–120 FPS or Unlimited), adaptive quality (steps render scale, dye resolution and effect quality down when frames run slow, and back up when they recover), render scale (internal resolution, 0% = 25%), effect quality (bloom, sunrays and glow resolution), particle limit, battery saver (caps at 30 FPS, 70% render scale, Low effects, 1,024 particles), and a live FPS readout
+- **Text:** text on/off, text mode (Paint: the letters keep pouring color into the fluid; Obstacle: the fluid flows around solid letters), edit text (multiple lines), font, font size, text color, outline and thickness, text glow and intensity, position x / y, rotation, opacity
+- **Background:** Black, White, Transparent (transparent screenshots), Custom (with a color picker) and the gradient presets, plus brightness, blur (a soft out-of-focus copy of the fluid behind it) and opacity
+- **Wallpaper:** splashes (gentle automatic splashes), clear on return (starts fresh when you come back to the page), and set live wallpaper (explains the options, since a web page can't install itself as an Android wallpaper)
 - **Modes, Colors, Capture**
 
 Simulation speed stays real-time at any frame rate limit: the solver sub-steps long frames, emitters keep their 60-per-second rhythm, and fast strokes are filled in between frames.

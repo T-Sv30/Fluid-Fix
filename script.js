@@ -167,6 +167,26 @@ let config = {
     EFFECT_QUALITY: 'Medium',
     PARTICLE_LIMIT: 'Maximum',
     BATTERY_SAVER: false,
+    // Stage 7
+    TEXT: false,
+    TEXT_MODE: 'Paint',
+    TEXT_CONTENT: 'Fluid Fix',
+    TEXT_FONT: 'Sans',
+    TEXT_SIZE: 40,
+    TEXT_COLOR: { r: 255, g: 255, b: 255 },
+    TEXT_OUTLINE: false,
+    TEXT_OUTLINE_THICKNESS: 30,
+    TEXT_GLOW: false,
+    TEXT_GLOW_INTENSITY: 50,
+    TEXT_X: 50,
+    TEXT_Y: 50,
+    TEXT_ROTATION: 50,
+    TEXT_OPACITY: 100,
+    BG_BRIGHTNESS: 50,
+    BG_BLUR: 0,
+    BG_OPACITY: 100,
+    SPLASHES: false,
+    WALLPAPER_CLEAR: false,
 }
 
 
@@ -190,6 +210,9 @@ const PALETTE_NAMES = Object.keys(PALETTES);
 // top, bottom, glow (glow is added as a soft radial light in the middle)
 const BACKGROUNDS = {
     'Black':      ['#000000', '#000000', '#000000'],
+    'White':      ['#ffffff', '#f2f2f4', '#000000'],
+    'Transparent': null, // nothing drawn; screenshots get a transparent background
+    'Custom':     null, // uses BACK_COLOR
     'Midnight':   ['#0b1026', '#000000', '#0a1a40'],
     'Nebula':     ['#1a0533', '#05010d', '#3b0a5e'],
     'Deep Ocean': ['#002233', '#000814', '#003b5c'],
@@ -197,7 +220,6 @@ const BACKGROUNDS = {
     'Forest':     ['#04170f', '#000604', '#0b2e1c'],
     'Charcoal':   ['#2b2b2e', '#121214', '#000000'],
     'Paper':      ['#f5f2ea', '#e4ded0', '#000000'],
-    'Custom':     null, // uses BACK_COLOR
 };
 const BACKGROUND_NAMES = Object.keys(BACKGROUNDS);
 
@@ -2070,6 +2092,655 @@ function updatePerformance (dt) {
         initFramebuffers();
 }
 
+// Stage 7: presets, text, background, wallpaper and interface actions
+
+// ---------- Safe storage (private windows and blocked storage just fall back to memory) ----------
+
+const memoryStore = {};
+
+function storeGet (key) {
+    try {
+        const v = window.localStorage.getItem(key);
+        return v != null ? v : (key in memoryStore ? memoryStore[key] : null);
+    } catch (e) {
+        return key in memoryStore ? memoryStore[key] : null;
+    }
+}
+
+function storeSet (key, value) {
+    memoryStore[key] = value;
+    try { window.localStorage.setItem(key, value); } catch (e) { /* memory only */ }
+}
+
+// ---------- Settings snapshots ----------
+
+// Device-specific and runtime keys are not part of a look, so presets and undo leave them alone
+const SNAPSHOT_EXCLUDE = new Set([
+    'PAUSED', 'DYE_RESOLUTION', 'SIM_RESOLUTION', 'CAPTURE_RESOLUTION',
+    'BLOOM_RESOLUTION', 'BLOOM_ITERATIONS', 'SUNRAYS_RESOLUTION', 'PRESSURE_ITERATIONS',
+    'FPS_LIMIT', 'ADAPTIVE_QUALITY', 'PERFORMANCE_MODE', 'RENDER_SCALE', 'EFFECT_QUALITY',
+    'PARTICLE_LIMIT', 'BATTERY_SAVER',
+]);
+
+function snapshotValues () {
+    const out = {};
+    Object.keys(config).forEach(k => {
+        if (!SNAPSHOT_EXCLUDE.has(k)) out[k] = config[k];
+    });
+    return JSON.parse(JSON.stringify(out));
+}
+
+function cleanValues (values) {
+    const out = {};
+    Object.keys(values || {}).forEach(k => {
+        if (!SNAPSHOT_EXCLUDE.has(k) && config.hasOwnProperty(k) && typeof values[k] === typeof config[k])
+            out[k] = values[k];
+    });
+    return JSON.parse(JSON.stringify(out));
+}
+
+let DEFAULT_VALUES = null;   // captured once the GUI exists
+
+function applyValues (values, fromDefaults) {
+    if (fromDefaults && DEFAULT_VALUES) Object.assign(config, JSON.parse(JSON.stringify(DEFAULT_VALUES)));
+    Object.assign(config, cleanValues(values));
+    setPalette(config.PALETTE, 0.8);
+    updateKeywords();
+    onEdgeChange();
+    modeState.t = 0;
+    modeState.prev = [];
+    textState.dirty = true;
+    refreshGUI();
+}
+
+// ---------- Presets ----------
+
+const ui7 = { preset: 'Default', presetName: 'Default' };
+let presetCtrl = null;
+
+function rebuildPresetDropdown () {
+    if (!presetCtrl || !presetCtrl.options) return;
+    presetCtrl = presetCtrl.options(presetNames()).name('preset').onChange(v => selectPreset(v, true));
+    presetCtrl.updateDisplay();
+}
+
+// Restores the last preset used on this device; runs once everything is initialized
+function initPresets () {
+    DEFAULT_VALUES = snapshotValues();
+    loadStoredPresets();
+    const saved = storeGet('fluidfix.currentPreset');
+    if (saved && saved !== 'Default' && presetNames().indexOf(saved) !== -1) selectPreset(saved, true);
+    else selectPreset('Default', false);
+    settingsHistory.lastSeen = JSON.stringify(snapshotValues());
+    settingsHistory.stack = [settingsHistory.lastSeen];
+    settingsHistory.index = 0;
+}
+
+const BUILTIN_PRESETS = {
+    'Default': {},
+    'Aurora Dream': { PALETTE: 'Aurora', BACKGROUND: 'Nebula', AUTOPLAY: true, TRAILS: true, GLOW_INTENSITY: 30, AUTO_TRANSITION: true },
+    'Lava Lamp': { PALETTE: 'Fire', BACKGROUND: 'Ember', BUOYANCY: 78, VISCOSITY: 45, CURL: 8, SPLAT_RADIUS: 0.45, AUTOPLAY: true },
+    'Neon Party': { PALETTE: 'Neon', BLACKLIGHT: true, MIRROR_MODE: 'Complex', AUTOPLAY: true, RAINBOW: true },
+    'Ink on Paper': { BACKGROUND: 'Paper', BLOOM: false, SUNRAYS: false, PALETTE: 'Ocean', CURL: 20, DENSITY_DISSIPATION: 0.92 },
+    'Starry Galaxy': { SIM_MODE: 'Galaxy', FORCE_FIELD: 'Vortex', FIELD_STRENGTH: 45, CURL: 25, PALETTE: 'Galaxy', BACKGROUND: 'Midnight', PARTICLES: true, PARTICLE_STYLE: 'Dust', PARTICLE_AMOUNT: 'Ultra' },
+};
+
+const presetState = {
+    user: [],          // [{ name, values }]
+    current: 'Default',
+};
+
+function loadStoredPresets () {
+    try {
+        const list = JSON.parse(storeGet('fluidfix.presets') || '[]');
+        presetState.user = Array.isArray(list)
+            ? list.filter(p => p && typeof p.name === 'string' && p.values && typeof p.values === 'object')
+            : [];
+    } catch (e) {
+        presetState.user = [];
+    }
+}
+
+function saveStoredPresets () {
+    storeSet('fluidfix.presets', JSON.stringify(presetState.user));
+    storeSet('fluidfix.currentPreset', presetState.current);
+}
+
+function presetNames () {
+    return Object.keys(BUILTIN_PRESETS).concat(presetState.user.map(p => p.name));
+}
+
+function isBuiltin (name) {
+    return BUILTIN_PRESETS.hasOwnProperty(name);
+}
+
+function findUserPreset (name) {
+    return presetState.user.find(p => p.name === name);
+}
+
+function uniqueName (base) {
+    const names = new Set(presetNames());
+    if (!names.has(base)) return base;
+    for (let i = 2; ; i++) {
+        const n = base + ' ' + i;
+        if (!names.has(n)) return n;
+    }
+}
+
+function selectPreset (name, apply) {
+    presetState.current = name;
+    ui7.preset = name;
+    ui7.presetName = name;
+    if (apply) {
+        const values = isBuiltin(name) ? BUILTIN_PRESETS[name] : (findUserPreset(name) || {}).values;
+        applyValues(values || {}, true);
+    }
+    saveStoredPresets();
+    rebuildPresetDropdown();
+}
+
+function presetSave () {
+    if (isBuiltin(presetState.current)) {
+        const name = uniqueName('My preset');
+        presetState.user.push({ name, values: snapshotValues() });
+        selectPreset(name, false);
+        showToast('Saved as ' + name);
+    } else {
+        findUserPreset(presetState.current).values = snapshotValues();
+        saveStoredPresets();
+        showToast('Saved ' + presetState.current);
+    }
+}
+
+function presetNew () {
+    const name = uniqueName('Preset');
+    presetState.user.push({ name, values: JSON.parse(JSON.stringify(DEFAULT_VALUES)) });
+    selectPreset(name, true);
+    showToast('New preset · ' + name);
+}
+
+function presetClone () {
+    const name = uniqueName(presetState.current + ' copy');
+    presetState.user.push({ name, values: snapshotValues() });
+    selectPreset(name, false);
+    showToast('Cloned as ' + name);
+}
+
+function presetRename (newName) {
+    newName = String(newName || '').trim().slice(0, 40);
+    if (!newName || newName === presetState.current) { ui7.presetName = presetState.current; refreshGUI(); return; }
+    if (isBuiltin(presetState.current)) {
+        ui7.presetName = presetState.current;
+        refreshGUI();
+        showToast('Built-in presets can’t be renamed · clone it first');
+        return;
+    }
+    if (presetNames().indexOf(newName) !== -1) {
+        ui7.presetName = presetState.current;
+        refreshGUI();
+        showToast('A preset called ' + newName + ' already exists');
+        return;
+    }
+    findUserPreset(presetState.current).name = newName;
+    selectPreset(newName, false);
+    showToast('Renamed to ' + newName);
+}
+
+function presetDelete () {
+    const name = presetState.current;
+    if (isBuiltin(name)) {
+        showToast('Built-in presets can’t be deleted');
+        return;
+    }
+    openModal({
+        title: 'Delete preset?',
+        text: '“' + name + '” will be removed from this device. This can’t be undone.',
+        buttons: [
+            { label: 'Cancel' },
+            { label: 'Delete', danger: true, action: () => {
+                presetState.user = presetState.user.filter(p => p.name !== name);
+                selectPreset('Default', false);
+                showToast('Deleted ' + name);
+            } },
+        ],
+    });
+}
+
+function presetExport () {
+    const name = presetState.current;
+    const json = JSON.stringify({ app: 'Fluid Fix', version: 1, name, values: snapshotValues() }, null, 2);
+    const buttons = [{ label: 'Close' }];
+    if (navigator.share)
+        buttons.push({ label: 'Share', action: () => { navigator.share({ title: 'Fluid Fix preset · ' + name, text: json }).catch(() => {}); } });
+    buttons.push({ label: 'Download', action: () => downloadText(name.replace(/[^\w\- ]+/g, '') + '.fluidfix.json', json) });
+    buttons.push({ label: 'Copy', primary: true, action: () => copyText(json) });
+    openModal({ title: 'Export preset', text: 'Share this with anyone using Fluid Fix. They can bring it in with Load preset.', input: json, readOnly: true, buttons });
+}
+
+function presetImport () {
+    openModal({
+        title: 'Load preset',
+        text: 'Paste a preset someone shared with you, or choose a .json file.',
+        input: '',
+        placeholder: '{ "app": "Fluid Fix", ... }',
+        file: true,
+        buttons: [
+            { label: 'Cancel' },
+            { label: 'Load', primary: true, keepOpen: true, action: (text) => importPresetText(text) },
+        ],
+    });
+}
+
+function importPresetText (text) {
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch (e) {
+        modalError('That isn’t valid preset text.');
+        return;
+    }
+    const values = cleanValues(data && data.values);
+    if (!Object.keys(values).length) {
+        modalError('No Fluid Fix settings found in that text.');
+        return;
+    }
+    const name = uniqueName(String(data.name || 'Imported').trim().slice(0, 40) || 'Imported');
+    presetState.user.push({ name, values });
+    closeModal();
+    selectPreset(name, true);
+    showToast('Loaded ' + name);
+}
+
+function resetSimulation () {
+    selectPreset('Default', true);
+    clearFluid();
+    showToast('Reset to default');
+}
+
+// ---------- Undo / redo (settings) ----------
+
+const settingsHistory = { stack: [], index: -1, lastSeen: null, timer: 0, applying: false };
+
+function recordHistory (dt) {
+    settingsHistory.timer += dt;
+    if (settingsHistory.timer < 0.3) return;
+    settingsHistory.timer = 0;
+    const s = JSON.stringify(snapshotValues());
+    if (s === settingsHistory.lastSeen) return;
+    settingsHistory.lastSeen = s;
+    settingsHistory.stack.length = settingsHistory.index + 1;
+    settingsHistory.stack.push(s);
+    if (settingsHistory.stack.length > 60) settingsHistory.stack.shift();
+    settingsHistory.index = settingsHistory.stack.length - 1;
+}
+
+function undo () {
+    if (settingsHistory.index <= 0) { showToast('Nothing to undo'); return; }
+    settingsHistory.index--;
+    applyValues(JSON.parse(settingsHistory.stack[settingsHistory.index]), false);
+    settingsHistory.lastSeen = settingsHistory.stack[settingsHistory.index];   // don't record the undo itself
+    showToast('Undo');
+}
+
+function redo () {
+    if (settingsHistory.index >= settingsHistory.stack.length - 1) { showToast('Nothing to redo'); return; }
+    settingsHistory.index++;
+    applyValues(JSON.parse(settingsHistory.stack[settingsHistory.index]), false);
+    settingsHistory.lastSeen = settingsHistory.stack[settingsHistory.index];
+    showToast('Redo');
+}
+
+// ---------- Clear fluid, fullscreen, screenshot, wallpaper ----------
+
+function clearFluid () {
+    const targets = [dye.read, dye.write, velocity.read, velocity.write, pressure.read, pressure.write,
+                     displacement && displacement.read, displacement && displacement.write,
+                     historyFBO && historyFBO.read, historyFBO && historyFBO.write,
+                     particles.trail && particles.trail.read, particles.trail && particles.trail.write];
+    gl.clearColor(0, 0, 0, 0);
+    targets.forEach(t => {
+        if (!t) return;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+    });
+    gl.clearColor(0, 0, 0, 1);
+}
+
+function isFullscreen () {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function toggleFullscreen () {
+    const el = document.documentElement;
+    try {
+        if (isFullscreen()) {
+            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        } else {
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            if (!req) throw new Error('unsupported');
+            const r = req.call(el);
+            if (r && r.catch) r.catch(() => showToast('Fullscreen isn’t available here'));
+        }
+    } catch (e) {
+        showToast('Fullscreen isn’t available here');
+    }
+}
+
+function showWallpaperInfo () {
+    openModal({
+        title: 'Live wallpaper',
+        text: 'A web page can’t install itself as an Android live wallpaper; that needs a native app. ' +
+              'For a wallpaper-like screen: turn on Splashes or Auto-play, tap Fullscreen, and keep the screen on. ' +
+              'Your current preset is kept the next time you open Fluid Fix on this device.',
+        buttons: [{ label: 'Go fullscreen', action: toggleFullscreen }, { label: 'OK', primary: true }],
+    });
+}
+
+const wallpaper = { timer: 2 };
+
+function updateWallpaper (dt) {
+    if (!config.SPLASHES || config.PAUSED) return;
+    wallpaper.timer -= dt;
+    if (wallpaper.timer <= 0) {
+        wallpaper.timer = 1.2 + Math.random() * 2.3;
+        splatStack.push(1 + Math.floor(Math.random() * 3));
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && config.WALLPAPER_CLEAR && dye) {
+        clearFluid();
+        splatStack.push(4 + Math.floor(Math.random() * 4));
+    }
+});
+
+function copyText (text) {
+    const done = () => showToast('Copied');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text));
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy (text) {
+    const ta = document.getElementById('modal-input');
+    if (ta) {
+        ta.focus();
+        ta.select();
+        try { document.execCommand('copy'); showToast('Copied'); return; } catch (e) { /* fall through */ }
+    }
+    showToast('Select the text and copy it');
+}
+
+function downloadText (filename, text) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
+
+// ---------- Modal ----------
+
+let modalButtons = [];
+
+function openModal (opts) {
+    const m = document.getElementById('modal');
+    if (!m) return;
+    document.getElementById('modal-title').textContent = opts.title || '';
+    document.getElementById('modal-text').textContent = opts.text || '';
+    document.getElementById('modal-error').textContent = '';
+    const input = document.getElementById('modal-input');
+    input.hidden = opts.input == null;
+    input.value = opts.input || '';
+    input.readOnly = !!opts.readOnly;
+    input.placeholder = opts.placeholder || '';
+    const file = document.getElementById('modal-file');
+    file.hidden = !opts.file;
+    file.value = '';
+    const actions = document.getElementById('modal-actions');
+    actions.innerHTML = '';
+    modalButtons = opts.buttons || [{ label: 'OK', primary: true }];
+    modalButtons.forEach(b => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = b.label;
+        btn.className = 'modal-btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : '');
+        btn.addEventListener('click', () => {
+            const value = input.value;
+            if (!b.keepOpen) closeModal();
+            if (b.action) b.action(value);
+        });
+        actions.appendChild(btn);
+    });
+    m.hidden = false;
+    setTimeout(() => {
+        if (!input.hidden && !input.readOnly) input.focus();
+        else { const p = actions.querySelector('.primary') || actions.lastChild; if (p) p.focus(); }
+    }, 30);
+}
+
+function closeModal () {
+    const m = document.getElementById('modal');
+    if (m) m.hidden = true;
+}
+
+function modalError (text) {
+    document.getElementById('modal-error').textContent = text;
+}
+
+function modalOpen () {
+    const m = document.getElementById('modal');
+    return !!(m && !m.hidden);
+}
+
+(function setupModal () {
+    const m = document.getElementById('modal');
+    if (!m || !m.addEventListener) return;
+    m.addEventListener('click', e => { if (e.target === m) closeModal(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && modalOpen()) closeModal(); });
+    const file = document.getElementById('modal-file');
+    file.addEventListener('change', () => {
+        const f = file.files && file.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => { document.getElementById('modal-input').value = String(reader.result || ''); };
+        reader.readAsText(f);
+    });
+})();
+
+// ---------- Text ----------
+
+const TEXT_MODES = ['Paint', 'Obstacle'];
+const TEXT_FONTS = {
+    'Sans':        'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    'Serif':       'Georgia, "Times New Roman", Times, serif',
+    'Mono':        '"SFMono-Regular", Menlo, Consolas, "Courier New", monospace',
+    'Rounded':     '"Arial Rounded MT Bold", "Nunito", "Varela Round", system-ui, sans-serif',
+    'Impact':      'Impact, "Arial Black", "Helvetica Neue", sans-serif',
+    'Handwriting': '"Segoe Script", "Brush Script MT", "Comic Sans MS", cursive',
+};
+
+const textState = {
+    canvas: null,
+    ctx: null,
+    texture: null,
+    dirty: true,
+    key: '',
+};
+
+function textSettingsKey () {
+    return JSON.stringify([config.TEXT_CONTENT, config.TEXT_FONT, config.TEXT_SIZE, config.TEXT_COLOR, config.TEXT_OUTLINE,
+        config.TEXT_OUTLINE_THICKNESS, config.TEXT_GLOW, config.TEXT_GLOW_INTENSITY, config.TEXT_X, config.TEXT_Y,
+        config.TEXT_ROTATION, canvas.width, canvas.height]);
+}
+
+function editText () {
+    openModal({
+        title: 'Edit text',
+        text: 'New lines start a new row of text.',
+        input: config.TEXT_CONTENT,
+        placeholder: 'Type something',
+        buttons: [
+            { label: 'Cancel' },
+            { label: 'Done', primary: true, action: (v) => {
+                config.TEXT_CONTENT = String(v).slice(0, 200);
+                if (!config.TEXT) config.TEXT = true;
+                textState.dirty = true;
+                refreshGUI();
+            } },
+        ],
+    });
+}
+
+function drawTextCanvas () {
+    const scale = Math.min(1, 1024 / Math.max(canvas.width, canvas.height));
+    const W = Math.max(2, Math.round(canvas.width * scale));
+    const H = Math.max(2, Math.round(canvas.height * scale));
+    if (!textState.canvas) {
+        textState.canvas = document.createElement('canvas');
+        textState.ctx = textState.canvas.getContext('2d');
+    }
+    const cv = textState.canvas, ctx = textState.ctx;
+    if (!ctx) return false;
+    cv.width = W;
+    cv.height = H;
+    ctx.clearRect(0, 0, W, H);
+
+    const lines = String(config.TEXT_CONTENT || '').split('\n');
+    const family = TEXT_FONTS[config.TEXT_FONT] || TEXT_FONTS['Sans'];
+    let size = (0.04 + 0.36 * config.TEXT_SIZE / 100) * Math.min(W, H);
+    ctx.font = '700 ' + size + 'px ' + family;
+    // Shrink to fit the screen width
+    const widest = Math.max(1, ...lines.map(l => ctx.measureText(l).width));
+    if (widest > W * 0.92) size *= W * 0.92 / widest;
+    ctx.font = '700 ' + size + 'px ' + family;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const c = config.TEXT_COLOR;
+    const fill = 'rgb(' + c.r + ',' + c.g + ',' + c.b + ')';
+    const light = (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255 > 0.75;
+    const lineH = size * 1.15;
+
+    ctx.save();
+    ctx.translate(config.TEXT_X / 100 * W, (1 - config.TEXT_Y / 100) * H);
+    ctx.rotate((config.TEXT_ROTATION - 50) / 50 * Math.PI);
+    const drawLines = fn => lines.forEach((l, i) => fn(l, 0, (i - (lines.length - 1) / 2) * lineH));
+
+    if (config.TEXT_GLOW && config.TEXT_GLOW_INTENSITY > 0) {
+        ctx.shadowColor = fill;
+        ctx.shadowBlur = size * (0.1 + 0.6 * config.TEXT_GLOW_INTENSITY / 100);
+        ctx.fillStyle = fill;
+        const passes = 1 + Math.round(config.TEXT_GLOW_INTENSITY / 40);
+        for (let i = 0; i < passes; i++) drawLines((l, x, y) => ctx.fillText(l, x, y));
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
+    }
+    if (config.TEXT_OUTLINE && config.TEXT_OUTLINE_THICKNESS > 0) {
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 1 + size * 0.16 * config.TEXT_OUTLINE_THICKNESS / 100;
+        ctx.strokeStyle = light ? '#111318' : '#ffffff';
+        drawLines((l, x, y) => ctx.strokeText(l, x, y));
+    }
+    ctx.fillStyle = fill;
+    drawLines((l, x, y) => ctx.fillText(l, x, y));
+    ctx.restore();
+    return true;
+}
+
+function updateTextTexture () {
+    if (!config.TEXT) return false;
+    const key = textSettingsKey();
+    if (!textState.dirty && key === textState.key && textState.texture) return true;
+    textState.key = key;
+    textState.dirty = false;
+    if (!drawTextCanvas()) return false;
+    if (!textState.texture) {
+        const tex = gl.createTexture();
+        textState.texture = {
+            texture: tex,
+            attach (id) {
+                gl.activeTexture(gl.TEXTURE0 + id);
+                gl.bindTexture(gl.TEXTURE_2D, tex);
+                return id;
+            }
+        };
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, textState.texture.texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textState.canvas);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    return true;
+}
+
+function textActive () {
+    return config.TEXT && String(config.TEXT_CONTENT || '').trim().length > 0 && textState.texture;
+}
+
+// mode 0: block velocity, 1: block color, 2: paint color
+function applyText (target, mode, amount) {
+    const u = textApplyProgram.uniforms;
+    textApplyProgram.bind();
+    gl.uniform1i(u.uTarget, target.read.attach(0));
+    gl.uniform1i(u.uText, textState.texture.attach(1));
+    gl.uniform1f(u.mode, mode);
+    gl.uniform1f(u.amount, amount);
+    blit(target.write);
+    target.swap();
+}
+
+function textVelocityPass () {
+    if (!textActive() || config.TEXT_MODE !== 'Obstacle') return;
+    applyText(velocity, 0, 1);
+}
+
+function textDyePass (dt) {
+    if (!textActive()) return;
+    if (config.TEXT_MODE === 'Obstacle') applyText(dye, 1, 1);
+    else applyText(dye, 2, 1.2 * dt * config.TEXT_OPACITY / 100);
+}
+
+function drawTextOverlay (target) {
+    if (!textActive() || config.TEXT_MODE !== 'Obstacle' || config.TEXT_OPACITY <= 0) return;
+    textOverlayProgram.bind();
+    gl.uniform1i(textOverlayProgram.uniforms.uText, textState.texture.attach(0));
+    gl.uniform1f(textOverlayProgram.uniforms.opacity, config.TEXT_OPACITY / 100);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    blit(target);
+}
+
+// ---------- Background blur backdrop ----------
+
+let bgBlurFBO = null;
+let bgBlurTemp = null;
+
+function applyBackgroundBlur () {
+    if (config.BG_BLUR <= 0) return;
+    if (!bgBlurFBO) {
+        const res = getResolution(96);
+        const rgba = ext.formatRGBA;
+        const filtering = ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
+        bgBlurFBO = createFBO(res.width, res.height, rgba.internalFormat, rgba.format, ext.halfFloatTexType, filtering);
+        bgBlurTemp = createFBO(res.width, res.height, rgba.internalFormat, rgba.format, ext.halfFloatTexType, filtering);
+    }
+    gl.disable(gl.BLEND);
+    copyProgram.bind();
+    gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
+    blit(bgBlurFBO);
+    blur(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -2172,6 +2843,23 @@ function startGUI () {
     gui.add({ fun: () => {
         splatStack.push(parseInt(Math.random() * 20) + 5);
     } }, 'fun').name('Random splats');
+    gui.add({ fun: () => { clearFluid(); showToast('Cleared'); } }, 'fun').name('🧽 Clear fluid');
+    gui.add({ fun: undo }, 'fun').name('↶ Undo');
+    gui.add({ fun: redo }, 'fun').name('↷ Redo');
+    gui.add({ fun: captureScreenshot }, 'fun').name('📷 Screenshot');
+    gui.add({ fun: toggleFullscreen }, 'fun').name('⛶ Fullscreen');
+
+    let presetsFolder = gui.addFolder('Presets');
+    presetCtrl = presetsFolder.add(ui7, 'preset', presetNames()).name('preset').onChange(v => selectPreset(v, true));
+    presetsFolder.add(ui7, 'presetName').name('preset name').onFinishChange(presetRename);
+    presetsFolder.add({ fun: presetSave }, 'fun').name('💾 Save preset');
+    presetsFolder.add({ fun: presetNew }, 'fun').name('＋ New');
+    presetsFolder.add({ fun: presetClone }, 'fun').name('⧉ Clone');
+    presetsFolder.add({ fun: randomizeConfig }, 'fun').name('🎲 Random');
+    presetsFolder.add({ fun: presetExport }, 'fun').name('📤 Export');
+    presetsFolder.add({ fun: presetImport }, 'fun').name('📂 Load preset…');
+    presetsFolder.add({ fun: presetDelete }, 'fun').name('🗑 Delete');
+    presetsFolder.add({ fun: resetSimulation }, 'fun').name('↺ Reset simulation');
 
     let simFolder = gui.addFolder('Simulation');
     simFolder.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').listen().onChange(v => {
@@ -2241,7 +2929,6 @@ function startGUI () {
     colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions').listen();
     colorsFolder.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
         .onChange(v => { config.TRANSITION_TIME = Number(v); });
-    colorsFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background').listen();
     colorsFolder.add(config, 'COLORFUL').name('colorful');
 
     let effectsFolder = gui.addFolder('Effects');
@@ -2326,10 +3013,37 @@ function startGUI () {
     perfFolder.add(config, 'BATTERY_SAVER').name('battery saver').listen();
     perfFolder.add(perf, 'fps').name('current fps').listen();
 
-    let captureFolder = gui.addFolder('Capture');
-    captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
+    let textFolder = gui.addFolder('Text');
+    textFolder.add(config, 'TEXT').name('text').listen();
+    textFolder.add(config, 'TEXT_MODE', TEXT_MODES).name('text mode').listen();
+    textFolder.add({ fun: editText }, 'fun').name('✎ Edit text');
+    textFolder.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font').listen();
+    textFolder.add(config, 'TEXT_SIZE', 0, 100).step(1).name('font size').listen();
+    textFolder.addColor(config, 'TEXT_COLOR').name('text color').listen();
+    textFolder.add(config, 'TEXT_OUTLINE').name('outline').listen();
+    textFolder.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline thickness').listen();
+    textFolder.add(config, 'TEXT_GLOW').name('text glow').listen();
+    textFolder.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow intensity').listen();
+    textFolder.add(config, 'TEXT_X', 0, 100).step(1).name('position x').listen();
+    textFolder.add(config, 'TEXT_Y', 0, 100).step(1).name('position y').listen();
+    textFolder.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)').listen();
+    textFolder.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity').listen();
+
+    let backgroundFolder = gui.addFolder('Background');
+    backgroundFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background').listen();
+    backgroundFolder.addColor(config, 'BACK_COLOR').name('background color').listen().onChange(() => {
         config.BACKGROUND = 'Custom';
     });
+    backgroundFolder.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness (50 = normal)').listen();
+    backgroundFolder.add(config, 'BG_BLUR', 0, 100).step(1).name('blur').listen();
+    backgroundFolder.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity').listen();
+
+    let wallpaperFolder = gui.addFolder('Wallpaper');
+    wallpaperFolder.add(config, 'SPLASHES').name('splashes').listen();
+    wallpaperFolder.add(config, 'WALLPAPER_CLEAR').name('clear on return').listen();
+    wallpaperFolder.add({ fun: showWallpaperInfo }, 'fun').name('📱 Set live wallpaper');
+
+    let captureFolder = gui.addFolder('Capture');
     captureFolder.add(config, 'TRANSPARENT').name('transparent');
     captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
 
@@ -2609,6 +3323,10 @@ const backgroundShader = compileShader(gl.FRAGMENT_SHADER, `
     uniform vec3 bottom;
     uniform vec3 glow;
     uniform float aspectRatio;
+    uniform float brightness;
+    uniform float opacity;
+    uniform sampler2D uBlur;
+    uniform float blurAmount;
 
     void main () {
         vec3 c = mix(bottom, top, smoothstep(0.0, 1.0, vUv.y));
@@ -2618,7 +3336,10 @@ const backgroundShader = compileShader(gl.FRAGMENT_SHADER, `
         c *= 1.0 - 0.35 * smoothstep(0.45, 1.2, r);
         float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
         c += (n - 0.5) / 255.0;
-        gl_FragColor = vec4(max(c, 0.0), 1.0);
+        c = c * brightness + vec3(max(brightness - 1.0, 0.0) * 0.12);
+        // Background blur: a soft, out-of-focus copy of the fluid behind it
+        c += texture2D(uBlur, vUv).rgb * blurAmount;
+        gl_FragColor = vec4(max(c, 0.0) * opacity, opacity);
     }
 `);
 
@@ -3388,6 +4109,40 @@ const forcesShader = compileShader(gl.FRAGMENT_SHADER, `
     }
 `);
 
+const textApplyShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uTarget;
+    uniform sampler2D uText;
+    uniform float mode;
+    uniform float amount;
+
+    void main () {
+        vec4 c = texture2D(uTarget, vUv);
+        vec4 t = texture2D(uText, vUv);
+        float m = smoothstep(0.35, 0.65, t.a);
+        if (mode < 0.5) c.xy *= 1.0 - m;           // obstacle: no flow inside letters
+        else if (mode < 1.5) c.rgb *= 1.0 - m;     // obstacle: no color inside letters
+        else c.rgb += t.rgb * amount;              // paint: letters keep adding color
+        gl_FragColor = c;
+    }
+`);
+
+const textOverlayShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    precision mediump sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uText;
+    uniform float opacity;
+
+    void main () {
+        gl_FragColor = texture2D(uText, vUv) * opacity;
+    }
+`);
+
 const pointForceShader = compileShader(gl.FRAGMENT_SHADER, `
     precision highp float;
     precision highp sampler2D;
@@ -3669,6 +4424,8 @@ const forcesProgram          = new Program(baseVertexShader, forcesShader);
 const displacementProgram    = new Program(baseVertexShader, displacementShader);
 const viscosityProgram       = new Program(baseVertexShader, viscosityShader);
 const pointForceProgram      = new Program(baseVertexShader, pointForceShader);
+const textApplyProgram       = new Program(baseVertexShader, textApplyShader);
+const textOverlayProgram     = new Program(baseVertexShader, textOverlayShader);
 const edgeDyeProgram         = new Program(baseVertexShader, edgeDyeShader);
 const advectionProgram       = new Program(baseVertexShader, advectionShader);
 const divergenceProgram      = new Program(baseVertexShader, divergenceShader);
@@ -3891,6 +4648,7 @@ multipleSplats(parseInt(Math.random() * 20) + 5);
 
 let lastUpdateTime = null;
 let colorUpdateTimer = 0.0;
+initPresets();
 update();
 
 function update (timestamp) {
@@ -3908,6 +4666,9 @@ function update (timestamp) {
     updatePerformance(frameSeconds);
     if (resizeCanvas())
         initFramebuffers();
+    updateTextTexture();
+    updateWallpaper(dt);
+    recordHistory(frameSeconds);
     updateColors(dt);
     updatePalette(dt);
     updateBackground(dt);
@@ -3996,6 +4757,7 @@ function step (dt) {
     velocity.swap();
 
     applyForces(dt);
+    textVelocityPass();
 
     divergenceProgram.bind();
     gl.uniform2f(divergenceProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
@@ -4048,6 +4810,7 @@ function step (dt) {
     dye.swap();
 
     applyDyeEdges(dt);
+    textDyePass(dt);
 }
 
 function applyForces (dt) {
@@ -4133,13 +4896,15 @@ function render (target, dt) {
     }
     if (config.GLOW_INTENSITY > 0)
         applyGlow();
+    applyBackgroundBlur();
+    const transparent = config.TRANSPARENT || config.BACKGROUND === 'Transparent';
 
     // Screen filters render the frame offscreen first, then post-process it
     const usePost = target == null && postKeywords().length > 0;
     if (usePost) ensurePostFramebuffers();
     const dest = usePost ? frameFBO : target;
 
-    if (target == null || !config.TRANSPARENT) {
+    if (target == null || !transparent) {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.BLEND);
     }
@@ -4153,12 +4918,13 @@ function render (target, dt) {
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
     }
-    if (!config.TRANSPARENT)
+    if (!transparent)
         drawBackground(dest);
-    if (target == null && config.TRANSPARENT)
+    if (target == null && transparent)
         drawCheckerboard(dest);
     drawDisplay(dest);
     renderParticles(dest);
+    drawTextOverlay(dest);
 
     if (usePost)
         runPost(dt || 0.016);
@@ -4178,6 +4944,10 @@ function drawBackground (target) {
     gl.uniform3f(backgroundProgram.uniforms.bottom, bgCurrent.bottom.r, bgCurrent.bottom.g, bgCurrent.bottom.b);
     gl.uniform3f(backgroundProgram.uniforms.glow, bgCurrent.glow.r, bgCurrent.glow.g, bgCurrent.glow.b);
     gl.uniform1f(backgroundProgram.uniforms.aspectRatio, width / height);
+    gl.uniform1f(backgroundProgram.uniforms.brightness, config.BG_BRIGHTNESS / 50);
+    gl.uniform1f(backgroundProgram.uniforms.opacity, config.BG_OPACITY / 100);
+    gl.uniform1i(backgroundProgram.uniforms.uBlur, (config.BG_BLUR > 0 && bgBlurFBO ? bgBlurFBO : dye.read).attach(5));
+    gl.uniform1f(backgroundProgram.uniforms.blurAmount, config.BG_BLUR > 0 && bgBlurFBO ? 0.45 * Math.min(1, config.BG_BLUR / 30) : 0);
     blit(target);
 }
 
@@ -4414,7 +5184,19 @@ window.addEventListener('touchcancel', releaseTouches);
 window.addEventListener('blur', () => pointers.forEach(updatePointerUpData));
 
 window.addEventListener('keydown', e => {
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+    if (modalOpen()) return;
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
+        e.preventDefault();
+        redo();
+        return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === ' ') {
         e.preventDefault();
         splatStack.push(parseInt(Math.random() * 20) + 5);
