@@ -17,10 +17,10 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Randomize | New palette, background, motion and symmetry in one tap | R |
 | Auto-play | Three streams paint by themselves on slow, wandering paths, with occasional bursts | A |
 | Vortex | Orbiting arms stir a continuous whirlpool around the center | V |
-| Mirror mode | Everything you draw is reflected left/right | M |
+| Mirror | None, Horizontal, Vertical, Diagonal or Complex (4-way) symmetry | M (cycle) |
 | Kaleidoscope | 2–10 rotated and reflected segments around the center | K |
 | Color trails | Dye fades about 8× slower, leaving long trails | T |
-| Blacklight | Neon-saturated colors with a UV-violet glow | B |
+| Blacklight | Fluorescent colors under UV light, with intensity, fluorescence and 8 UV color modes | B |
 | Background presets | Black, Midnight, Nebula, Deep Ocean, Ember, Forest, Charcoal, Paper, Custom (crossfades) | |
 | Time | Simulation speed: 0% stopped, 50% normal, 100% = 3× (sub-stepped to stay stable) | |
 | Touch force | Strength of every touch and emitter: 50% normal, 100% = 3× | |
@@ -41,7 +41,12 @@ Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value
   - **Gesture modes:** Push (classic), Pull (draws color in behind the finger), Swirl (spins fluid around the finger), Attract and Repel (hold to pull color in or push it away), Inject (color with little force), Erase (wipes color away), Vortex (a whirlpool under the finger)
   - **Injection modes:** Continuous, Burst (a ring of color on touch), Pulse (rhythmic bursts), Spray (spray-paint speckles), Fountain (an upward jet), Random (random directions and colors), Directional (a steady jet in the direction you last moved)
 - **Forces → force field:** Vortex, Attractor, Repeller, Spiral, Radial (a turning star of rays), Wave (traveling waves), Magnetic (two poles), plus field strength
-- **Modes, Colors, Effects, Capture**
+- **Effects:** shading, bloom, flare (Soft, Sharp, Radial, Cinematic), sunrays, gamma (Standard, Bright, Dark, Cinematic), specular highlights (Soft, Glossy, Sharp), mirror, glow intensity and radius, refraction (glass-like distortion), reflection, transparency, depth (relief lighting and a drop shadow)
+- **Blacklight:** blacklight mode, intensity, fluorescence (brightness and glowing edges), UV color mode (Neon Blue, Electric Purple, Fluorescent Pink, Toxic Green, Neon Orange, Ultraviolet, Cyan, Full Spectrum)
+- **Filters:** pixels (2×–16×), neon outlines, emboss, lens fringe, film filter (warm grade, vignette, grain), saturation and contrast (50% = unchanged), invert, shake (follows how hard you stir; Subtle, Normal, Strong), motion echoes (Smooth, Fluid, Dramatic) with intensity, chromatic aberration, blur, sharpen, color variation
+- **Modes, Colors, Capture**
+
+Screen filters only run while at least one is switched on, so they cost nothing when off. Screenshots capture the fluid without screen filters.
 
 Gravity, buoyancy and flow direction act on the colored fluid, so dense color sinks, rises or drifts while clear areas stay calm. In Wrap and Void modes a directional flow also moves the whole field.
 

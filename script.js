@@ -68,7 +68,6 @@ let config = {
     RANDOM_INJECTION: false,
     AUTOPLAY: false,
     VORTEX: false,
-    MIRROR: false,
     KALEIDOSCOPE: false,
     KALEIDO_SEGMENTS: 6,
     // Stage 1 (0-100 percentages unless noted)
@@ -101,6 +100,41 @@ let config = {
     INJECTION: 'Continuous',
     FORCE_FIELD: 'None',
     FIELD_STRENGTH: 50,
+    // Stage 3: effects, blacklight, filters
+    MIRROR_MODE: 'None',
+    FLARE: false,
+    FLARE_STYLE: 'Soft',
+    GAMMA: false,
+    GAMMA_MODE: 'Standard',
+    SPECULAR: false,
+    SPECULAR_STYLE: 'Glossy',
+    GLOW_INTENSITY: 0,
+    GLOW_RADIUS: 40,
+    REFRACTION: 0,
+    REFLECTION: 0,
+    TRANSPARENCY: 0,
+    DEPTH: 0,
+    BLACKLIGHT_INTENSITY: 60,
+    FLUORESCENCE: 50,
+    UV_MODE: 'Full Spectrum',
+    PIXELS: false,
+    PIXEL_MODE: '4×',
+    NEON: false,
+    EMBOSS: false,
+    FRINGE: false,
+    FILTER: false,
+    SATURATION: 50,
+    CONTRAST: 50,
+    INVERT: false,
+    SHAKE: false,
+    SHAKE_STYLE: 'Normal',
+    MOTION: false,
+    MOTION_STYLE: 'Smooth',
+    MOTION_INTENSITY: 50,
+    CHROMATIC_ABERRATION: 0,
+    BLUR: 0,
+    SHARPEN: 0,
+    COLOR_VARIATION: 0,
 }
 
 
@@ -250,8 +284,17 @@ function symmetryCopies (x, y, dx, dy) {
         }
         return dedupeCopies(out);
     }
-    if (config.MIRROR)
-        return dedupeCopies([[x, y, dx, dy, false], [1 - x, y, -dx, dy, true]]);
+    switch (config.MIRROR_MODE) {
+        case 'Horizontal':
+            return dedupeCopies([[x, y, dx, dy, false], [1 - x, y, -dx, dy, true]]);
+        case 'Vertical':
+            return dedupeCopies([[x, y, dx, dy, false], [x, 1 - y, dx, -dy, true]]);
+        case 'Diagonal':
+            return dedupeCopies([[x, y, dx, dy, false], [1 - x, 1 - y, -dx, -dy, false]]);
+        case 'Complex':
+            return dedupeCopies([[x, y, dx, dy, false], [1 - x, y, -dx, dy, true],
+                                 [x, 1 - y, dx, -dy, true], [1 - x, 1 - y, -dx, -dy, false]]);
+    }
     return [[x, y, dx, dy, false]];
 }
 
@@ -377,9 +420,13 @@ function backgroundTarget () {
         glow = { r: 0, g: 0, b: 0 };
     }
     if (config.BLACKLIGHT) {
-        top = lerpColor(top, { r: 0.02, g: 0.0, b: 0.06 }, 0.6);
-        bottom = lerpColor(bottom, { r: 0.0, g: 0.0, b: 0.02 }, 0.6);
-        glow = { r: glow.r + 0.12, g: glow.g, b: glow.b + 0.28 };
+        const I = config.BLACKLIGHT_INTENSITY / 100;
+        const f = 0.3 + 0.65 * I;
+        const uv = uvColor();
+        const tint = uv ? { r: uv[0] * 0.3, g: uv[1] * 0.3, b: uv[2] * 0.3 } : { r: 0.12, g: 0.0, b: 0.28 };
+        top = lerpColor(top, { r: 0.02, g: 0.0, b: 0.06 }, f);
+        bottom = lerpColor(bottom, { r: 0.0, g: 0.0, b: 0.02 }, f);
+        glow = { r: glow.r + tint.r * I, g: glow.g + tint.g * I, b: glow.b + tint.b * I };
     }
     return { top, bottom, glow };
 }
@@ -418,7 +465,7 @@ function randomizeConfig () {
     config.TRAILS = Math.random() < 0.3;
     config.BLACKLIGHT = Math.random() < 0.2;
     const sym = Math.random();
-    config.MIRROR = sym >= 0.5 && sym < 0.75;
+    config.MIRROR_MODE = sym >= 0.5 && sym < 0.75 ? pick(['Horizontal', 'Vertical', 'Diagonal', 'Complex']) : 'None';
     config.KALEIDOSCOPE = sym >= 0.75;
     config.KALEIDO_SEGMENTS = Math.round(rand(3, 8));
     updateKeywords();
@@ -427,7 +474,7 @@ function randomizeConfig () {
 
     let label = palette + ' · ' + background;
     if (config.KALEIDOSCOPE) label += ' · Kaleidoscope';
-    else if (config.MIRROR) label += ' · Mirror';
+    else if (config.MIRROR_MODE !== 'None') label += ' · Mirror ' + config.MIRROR_MODE;
     showToast(label);
 }
 
@@ -438,8 +485,7 @@ function toggleFreeze () {
 
 function toggleMode (key, label) {
     config[key] = !config[key];
-    if (key === 'MIRROR' && config.MIRROR) config.KALEIDOSCOPE = false;
-    if (key === 'KALEIDOSCOPE' && config.KALEIDOSCOPE) config.MIRROR = false;
+    if (key === 'KALEIDOSCOPE' && config.KALEIDOSCOPE) config.MIRROR_MODE = 'None';
     if (key === 'BLACKLIGHT') updateKeywords();
     showToast(label + (config[key] ? ' on' : ' off'));
 }
@@ -841,6 +887,124 @@ function updateTouches (dt) {
     splatRadiusScale = 1;
 }
 
+// Stage 3: effects, blacklight and filters
+
+const MIRROR_MODES = ['None', 'Horizontal', 'Vertical', 'Diagonal', 'Complex'];
+const FLARE_STYLES = ['Soft', 'Sharp', 'Radial', 'Cinematic'];
+const GAMMA_MODES = ['Standard', 'Bright', 'Dark', 'Cinematic'];
+const SPECULAR_STYLES = { 'Soft': [8, 0.6], 'Glossy': [32, 1.0], 'Sharp': [128, 1.6] };
+const UV_MODES = {
+    'Neon Blue':        [0.10, 0.45, 1.00],
+    'Electric Purple':  [0.62, 0.15, 1.00],
+    'Fluorescent Pink': [1.00, 0.15, 0.65],
+    'Toxic Green':      [0.35, 1.00, 0.10],
+    'Neon Orange':      [1.00, 0.45, 0.05],
+    'Ultraviolet':      [0.35, 0.05, 0.95],
+    'Cyan':             [0.00, 0.95, 1.00],
+    'Full Spectrum':    null,
+};
+const PIXEL_MODES = { '2×': 2, '4×': 4, '8×': 8, '16×': 16 };
+const SHAKE_STYLES = { 'Subtle': 0.003, 'Normal': 0.008, 'Strong': 0.02 };
+const MOTION_STYLES = ['Smooth', 'Fluid', 'Dramatic'];
+
+let glowFBO = null;
+let glowTemp = null;
+let frameFBO = null;
+let historyFBO = null;
+let postTime = 0;
+let shakeEnergy = 0;
+let shakeOffset = { x: 0, y: 0 };
+
+function postKeywords () {
+    const k = [];
+    if (config.CHROMATIC_ABERRATION > 0 || config.FRINGE) k.push('CHROMA');
+    if (config.SHAKE) k.push('SHAKE');
+    if (config.PIXELS) k.push('PIXELATE');
+    if (config.BLUR > 0) k.push('BLUR');
+    if (config.SHARPEN > 0) k.push('SHARPEN');
+    if (config.EMBOSS) k.push('EMBOSS');
+    if (config.NEON) k.push('NEON');
+    if (config.SATURATION !== 50 || config.CONTRAST !== 50 || config.COLOR_VARIATION > 0) k.push('GRADE');
+    if (config.GAMMA) k.push('GAMMA');
+    if (config.FILTER) k.push('FILM');
+    if (config.INVERT) k.push('INVERT');
+    if (config.MOTION) k.push('MOTION');
+    return k;
+}
+
+function ensurePostFramebuffers () {
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    if (frameFBO && frameFBO.width === w && frameFBO.height === h) return;
+    frameFBO = createFBO(w, h, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
+    historyFBO = createDoubleFBO(w, h, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
+}
+
+// Screen shake follows how hard you are stirring, with a little constant life
+function updateShake (dt) {
+    let motion = 0;
+    pointers.forEach(p => {
+        if (p.down) motion += Math.hypot(p.deltaX, p.deltaY);
+    });
+    shakeEnergy = Math.min(1.5, shakeEnergy * Math.exp(-4 * dt) + motion * 6);
+    const amp = (SHAKE_STYLES[config.SHAKE_STYLE] || 0.008) * (0.15 + shakeEnergy);
+    const t = postTime;
+    shakeOffset.x = amp * (Math.sin(t * 37.1) * 0.6 + Math.sin(t * 23.7 + 1.3) * 0.4);
+    shakeOffset.y = amp * (Math.sin(t * 31.3 + 0.7) * 0.6 + Math.sin(t * 19.9 + 2.1) * 0.4);
+}
+
+function runPost (dt) {
+    postTime += dt;
+    if (config.SHAKE) updateShake(dt);
+    postMaterial.setKeywords(postKeywords());
+    postMaterial.bind();
+    const u = postMaterial.uniforms;
+    const dpr = window.devicePixelRatio || 1;
+    gl.disable(gl.BLEND);
+    gl.uniform1i(u.uFrame, frameFBO.attach(0));
+    gl.uniform1i(u.uHistory, historyFBO.read.attach(1));
+    gl.uniform2f(u.resolution, frameFBO.width, frameFBO.height);
+    gl.uniform1f(u.time, postTime);
+    gl.uniform2f(u.shake, shakeOffset.x, shakeOffset.y);
+    gl.uniform1f(u.pixelSize, (PIXEL_MODES[config.PIXEL_MODE] || 4) * 3 * dpr);
+    gl.uniform1f(u.caAmount, config.CHROMATIC_ABERRATION / 100 * 0.012);
+    gl.uniform1f(u.fringeAmount, config.FRINGE ? 0.025 : 0);
+    gl.uniform1f(u.blurAmount, config.BLUR / 100 * 6 * dpr);
+    gl.uniform1f(u.sharpenAmount, config.SHARPEN / 100 * 2.5);
+    gl.uniform1f(u.saturation, config.SATURATION / 50);
+    gl.uniform1f(u.contrast, 0.3 + config.CONTRAST / 100 * 1.4);
+    gl.uniform1f(u.variation, config.COLOR_VARIATION / 100 * 0.5);
+    gl.uniform1f(u.gammaMode, GAMMA_MODES.indexOf(config.GAMMA_MODE));
+    gl.uniform1f(u.motionMix, 0.5 + config.MOTION_INTENSITY / 100 * 0.47);
+    gl.uniform1f(u.motionStyle, MOTION_STYLES.indexOf(config.MOTION_STYLE));
+    if (config.MOTION) {
+        blit(historyFBO.write);
+        historyFBO.swap();
+        copyProgram.bind();
+        gl.uniform1i(copyProgram.uniforms.uTexture, historyFBO.read.attach(0));
+        blit(null);
+    } else {
+        blit(null);
+    }
+}
+
+function applyGlow () {
+    if (!glowFBO) return;
+    gl.disable(gl.BLEND);
+    copyProgram.bind();
+    gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
+    blit(glowFBO);
+    blur(glowFBO, glowTemp, 1 + Math.round(config.GLOW_RADIUS / 100 * 11));
+}
+
+function uvColor () {
+    return UV_MODES[config.UV_MODE] || null;
+}
+
+function cycleMirror () {
+    cycleSetting('MIRROR_MODE', MIRROR_MODES, 'Mirror');
+    if (config.MIRROR_MODE !== 'None') config.KALEIDOSCOPE = false;
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -990,17 +1154,13 @@ function startGUI () {
 
     let modesFolder = gui.addFolder('Modes');
     modesFolder.add(config, 'VORTEX').name('vortex').listen();
-    modesFolder.add(config, 'MIRROR').name('mirror').listen().onChange(v => {
-        if (v) config.KALEIDOSCOPE = false;
-    });
     modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').listen().onChange(v => {
-        if (v) config.MIRROR = false;
+        if (v) config.MIRROR_MODE = 'None';
     });
     modesFolder.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments').listen()
         .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
     modesFolder.add(config, 'RAINBOW').name('rainbow').listen();
     addPct(modesFolder, 'RAINBOW_SPD', 'rainbow speed');
-    modesFolder.add(config, 'BLACKLIGHT').name('blacklight').listen().onChange(updateKeywords);
     modesFolder.add(config, 'TRAILS').name('color trails').listen();
     modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch').listen();
 
@@ -1013,12 +1173,53 @@ function startGUI () {
     colorsFolder.add(config, 'COLORFUL').name('colorful');
 
     let effectsFolder = gui.addFolder('Effects');
-    effectsFolder.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
-    effectsFolder.add(config, 'BLOOM').name('bloom').onFinishChange(updateKeywords);
+    effectsFolder.add(config, 'SHADING').name('shading');
+    effectsFolder.add(config, 'BLOOM').name('bloom');
     addPct(effectsFolder, 'BLOOM_INT', 'bloom intensity');
     addPct(effectsFolder, 'BLOOM_THR', 'bloom threshold');
-    effectsFolder.add(config, 'SUNRAYS').name('sunrays').onFinishChange(updateKeywords);
+    effectsFolder.add(config, 'FLARE').name('flare');
+    effectsFolder.add(config, 'FLARE_STYLE', FLARE_STYLES).name('flare style');
+    effectsFolder.add(config, 'SUNRAYS').name('sunrays');
     addPct(effectsFolder, 'SUNRAYS_W', 'sunrays weight');
+    effectsFolder.add(config, 'GAMMA').name('gamma');
+    effectsFolder.add(config, 'GAMMA_MODE', GAMMA_MODES).name('gamma mode');
+    effectsFolder.add(config, 'SPECULAR').name('specular');
+    effectsFolder.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
+    effectsFolder.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').listen().onChange(v => {
+        if (v !== 'None') config.KALEIDOSCOPE = false;
+    });
+    effectsFolder.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow intensity');
+    effectsFolder.add(config, 'GLOW_RADIUS', 0, 100).step(1).name('glow radius');
+    effectsFolder.add(config, 'REFRACTION', 0, 100).step(1).name('refraction');
+    effectsFolder.add(config, 'REFLECTION', 0, 100).step(1).name('reflection');
+    effectsFolder.add(config, 'TRANSPARENCY', 0, 100).step(1).name('transparency');
+    effectsFolder.add(config, 'DEPTH', 0, 100).step(1).name('depth');
+
+    let blacklightFolder = gui.addFolder('Blacklight');
+    blacklightFolder.add(config, 'BLACKLIGHT').name('blacklight mode').listen();
+    blacklightFolder.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('blacklight intensity');
+    blacklightFolder.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
+    blacklightFolder.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color mode');
+
+    let filtersFolder = gui.addFolder('Filters');
+    filtersFolder.add(config, 'PIXELS').name('pixels');
+    filtersFolder.add(config, 'PIXEL_MODE', Object.keys(PIXEL_MODES)).name('pixel mode');
+    filtersFolder.add(config, 'NEON').name('neon');
+    filtersFolder.add(config, 'EMBOSS').name('emboss');
+    filtersFolder.add(config, 'FRINGE').name('fringe');
+    filtersFolder.add(config, 'FILTER').name('film filter');
+    filtersFolder.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
+    filtersFolder.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
+    filtersFolder.add(config, 'INVERT').name('invert');
+    filtersFolder.add(config, 'SHAKE').name('shake');
+    filtersFolder.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
+    filtersFolder.add(config, 'MOTION').name('motion');
+    filtersFolder.add(config, 'MOTION_STYLE', MOTION_STYLES).name('motion style');
+    filtersFolder.add(config, 'MOTION_INTENSITY', 0, 100).step(1).name('motion intensity');
+    filtersFolder.add(config, 'CHROMATIC_ABERRATION', 0, 100).step(1).name('chromatic aberration');
+    filtersFolder.add(config, 'BLUR', 0, 100).step(1).name('blur');
+    filtersFolder.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
+    filtersFolder.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
 
     let captureFolder = gui.addFolder('Capture');
     captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
@@ -1109,9 +1310,7 @@ class Material {
     }
 
     setKeywords (keywords) {
-        let hash = 0;
-        for (let i = 0; i < keywords.length; i++)
-            hash += hashCode(keywords[i]);
+        let hash = keywords.join('|');
 
         let program = this.programs[hash];
         if (program == null)
@@ -1331,18 +1530,88 @@ const displayShaderSource = `
     uniform sampler2D uBloom;
     uniform sampler2D uSunrays;
     uniform sampler2D uDithering;
+    uniform sampler2D uGlow;
     uniform vec2 ditherScale;
     uniform vec2 texelSize;
+    uniform float specularPower;
+    uniform float specularStrength;
+    uniform float refraction;
+    uniform float reflection;
+    uniform float transparency;
+    uniform float depth;
+    uniform float glowIntensity;
+    uniform float flareStyle;
+    uniform float blIntensity;
+    uniform float fluorescence;
+    uniform float uvTint;
+    uniform vec3 uvColor;
+    uniform vec3 envTop;
+    uniform vec3 envBottom;
+
+    #if defined(SHADING) || defined(SPECULAR) || defined(REFRACTION) || defined(REFLECTION) || defined(DEPTH) || defined(BLACKLIGHT)
+    #define NEEDS_NORMAL
+    #endif
 
     vec3 linearToGamma (vec3 color) {
         color = max(color, vec3(0));
         return max(1.055 * pow(color, vec3(0.416666667)) - 0.055, vec3(0));
     }
 
-    void main () {
-        vec3 c = texture2D(uTexture, vUv).rgb;
+    float maxc (vec3 c) {
+        return max(c.r, max(c.g, c.b));
+    }
 
-    #ifdef SHADING
+    #ifdef FLARE
+    float ghostWeight (vec2 o, float power) {
+        return pow(max(1.0 - length(vec2(0.5) - o) / 0.7071, 0.0), power);
+    }
+
+    vec3 flare (vec2 uv) {
+        vec2 tc = vec2(1.0) - uv;
+        vec2 toC = vec2(0.5) - tc;
+        vec3 res = vec3(0.0);
+        if (flareStyle < 0.5) {
+            // Soft: a few wide, gentle ghosts
+            for (int i = 0; i < 4; i++) {
+                vec2 o = tc + toC * 0.45 * float(i);
+                res += texture2D(uBloom, o).rgb * ghostWeight(o, 6.0);
+            }
+            res *= 0.35;
+        } else if (flareStyle < 1.5) {
+            // Sharp: a chain of crisp ghosts with color fringing
+            for (int i = 0; i < 7; i++) {
+                vec2 o = tc + toC * 0.28 * float(i);
+                float w = ghostWeight(o, 10.0);
+                res.r += texture2D(uBloom, o + toC * 0.012).r * w;
+                res.g += texture2D(uBloom, o).g * w;
+                res.b += texture2D(uBloom, o - toC * 0.012).b * w;
+            }
+            res *= 0.6;
+        } else if (flareStyle < 2.5) {
+            // Radial: a halo ring around the center
+            vec2 hv = normalize(toC + vec2(1e-5)) * 0.42;
+            vec2 o = tc + hv;
+            res = texture2D(uBloom, o).rgb * ghostWeight(o, 4.0) * 0.9;
+            vec2 o2 = tc + hv * 0.6;
+            res += texture2D(uBloom, o2).rgb * ghostWeight(o2, 4.0) * vec3(0.6, 0.8, 1.0) * 0.4;
+        } else {
+            // Cinematic: blue anamorphic horizontal streaks
+            for (int i = -6; i <= 6; i++) {
+                float f = float(i);
+                res += texture2D(uBloom, uv + vec2(f * 0.035, 0.0)).rgb * exp(-abs(f) * 0.35);
+            }
+            res *= vec3(0.35, 0.55, 1.0) * 0.35;
+        }
+        return res;
+    }
+    #endif
+
+    void main () {
+        vec2 uv = vUv;
+        vec3 n = vec3(0.0, 0.0, 1.0);
+        float edge = 0.0;
+
+    #ifdef NEEDS_NORMAL
         vec3 lc = texture2D(uTexture, vL).rgb;
         vec3 rc = texture2D(uTexture, vR).rgb;
         vec3 tc = texture2D(uTexture, vT).rgb;
@@ -1351,21 +1620,50 @@ const displayShaderSource = `
         float dx = length(rc) - length(lc);
         float dy = length(tc) - length(bc);
 
-        vec3 n = normalize(vec3(dx, dy, length(texelSize)));
-        vec3 l = vec3(0.0, 0.0, 1.0);
+        n = normalize(vec3(dx, dy, length(texelSize)));
+        edge = length(vec2(dx, dy));
+    #endif
 
-        float diffuse = clamp(dot(n, l) + 0.7, 0.7, 1.0);
+    #ifdef REFRACTION
+        uv += n.xy * refraction;
+    #endif
+
+        vec3 c = texture2D(uTexture, uv).rgb;
+        float presence = clamp(maxc(c) * 3.0, 0.0, 1.0);
+
+    #ifdef SHADING
+        float diffuse = clamp(dot(n, vec3(0.0, 0.0, 1.0)) + 0.7, 0.7, 1.0);
         c *= diffuse;
     #endif
 
-    #ifdef BLOOM
+    #ifdef DEPTH
+        vec3 ld = normalize(vec3(-0.5, 0.6, 1.0));
+        c *= mix(1.0, clamp(dot(n, ld) * 1.4 - 0.15, 0.25, 1.3), depth);
+    #endif
+
+    #ifdef SPECULAR
+        vec3 L = normalize(vec3(-0.6, 0.7, 0.45));
+        vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+        float spec = pow(max(dot(n, H), 0.0), specularPower) - pow(H.z, specularPower);
+        c += vec3(max(spec, 0.0) * specularStrength) * presence;
+    #endif
+
+    #ifdef REFLECTION
+        vec3 R = reflect(vec3(0.0, 0.0, -1.0), n);
+        vec3 env = mix(envBottom, envTop, smoothstep(-0.6, 0.8, R.y));
+        env += vec3(1.0) * pow(max(dot(R, normalize(vec3(-0.4, 0.7, 0.6))), 0.0), 24.0);
+        float fres = pow(1.0 - clamp(n.z, 0.0, 1.0), 1.5);
+        c += env * reflection * (0.15 + 0.85 * fres) * presence;
+    #endif
+
+    #if defined(BLOOM) || defined(FLARE)
         vec3 bloom = texture2D(uBloom, vUv).rgb;
     #endif
 
     #ifdef SUNRAYS
         float sunrays = texture2D(uSunrays, vUv).r;
         c *= sunrays;
-    #ifdef BLOOM
+    #if defined(BLOOM) || defined(FLARE)
         bloom *= sunrays;
     #endif
     #endif
@@ -1378,15 +1676,199 @@ const displayShaderSource = `
         c += bloom;
     #endif
 
+    #ifdef GLOW
+        c += texture2D(uGlow, vUv).rgb * glowIntensity;
+    #endif
+
+    #ifdef FLARE
+        c += linearToGamma(flare(vUv));
+    #endif
+
     #ifdef BLACKLIGHT
+        float lumMax = maxc(c);
+        c = mix(c, uvColor * lumMax * 1.2, uvTint);
         float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
-        c = max(mix(vec3(lum), c, 1.6), 0.0) * 1.2;
+        c = max(mix(vec3(lum), c, 1.0 + 0.9 * blIntensity), 0.0) * (0.9 + 0.7 * fluorescence);
+        vec3 hue = c / max(maxc(c), 1e-4);
+        c += hue * clamp(edge * 120.0, 0.0, 1.0) * fluorescence * 0.6 * clamp(lumMax * 4.0, 0.0, 1.0);
     #endif
 
         float a = max(c.r, max(c.g, c.b));
+        c *= 1.0 - transparency * 0.8;
+        a *= 1.0 - transparency;
+
+    #ifdef DEPTH
+        // Drop shadow cast onto the background (light from the top left)
+        float sh = length(texture2D(uTexture, vUv + vec2(-0.006, 0.008)).rgb);
+        a += clamp(sh * 2.0, 0.0, 1.0) * depth * 0.55 * (1.0 - clamp(a, 0.0, 1.0));
+    #endif
+
         gl_FragColor = vec4(c, a);
     }
 `;
+
+const postShaderSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uFrame;
+    uniform sampler2D uHistory;
+    uniform vec2 resolution;
+    uniform float time;
+    uniform vec2 shake;
+    uniform float pixelSize;
+    uniform float caAmount;
+    uniform float fringeAmount;
+    uniform float blurAmount;
+    uniform float sharpenAmount;
+    uniform float saturation;
+    uniform float contrast;
+    uniform float variation;
+    uniform float gammaMode;
+    uniform float motionMix;
+    uniform float motionStyle;
+
+    float hash (vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float noise (vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                   mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+
+    vec3 hueRotate (vec3 c, float a) {
+        vec3 k = vec3(0.57735);
+        float ca = cos(a);
+        return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);
+    }
+
+    float luma (vec3 c) {
+        return dot(c, vec3(0.2126, 0.7152, 0.0722));
+    }
+
+    vec3 sampleColor (vec2 uv) {
+    #ifdef CHROMA
+        vec2 off = vec2(caAmount, 0.0) + (uv - 0.5) * fringeAmount;
+        return vec3(texture2D(uFrame, uv + off).r, texture2D(uFrame, uv).g, texture2D(uFrame, uv - off).b);
+    #else
+        return texture2D(uFrame, uv).rgb;
+    #endif
+    }
+
+    void main () {
+        vec2 uv = vUv;
+        vec2 px = 1.0 / resolution;
+
+    #ifdef SHAKE
+        uv = (uv - 0.5) * 0.97 + 0.5 + shake;
+    #endif
+
+    #ifdef PIXELATE
+        vec2 cells = resolution / pixelSize;
+        uv = (floor(uv * cells) + 0.5) / cells;
+    #endif
+
+        vec3 c = sampleColor(uv);
+
+    #ifdef BLUR
+        vec3 s = vec3(0.0);
+        for (int i = 0; i < 8; i++) {
+            float a = float(i) * 0.7853982;
+            vec2 d = vec2(cos(a), sin(a)) * px * blurAmount;
+            s += texture2D(uFrame, uv + d).rgb * 0.6 + texture2D(uFrame, uv + d * 2.0).rgb * 0.3;
+        }
+        c = (c + s) / (1.0 + 8.0 * 0.9);
+    #endif
+
+    #ifdef SHARPEN
+        vec3 nb = (texture2D(uFrame, uv + vec2(px.x, 0.0)).rgb + texture2D(uFrame, uv - vec2(px.x, 0.0)).rgb
+                 + texture2D(uFrame, uv + vec2(0.0, px.y)).rgb + texture2D(uFrame, uv - vec2(0.0, px.y)).rgb) * 0.25;
+        c += (c - nb) * sharpenAmount;
+    #endif
+
+    #ifdef EMBOSS
+        float e = luma(texture2D(uFrame, uv + px * 1.5).rgb) - luma(texture2D(uFrame, uv - px * 1.5).rgb);
+        e *= 4.0;
+        c = c * (1.0 + e * 1.5) + vec3(max(e, 0.0)) * 0.25;
+    #endif
+
+    #ifdef NEON
+        float tl = luma(texture2D(uFrame, uv + vec2(-px.x, px.y) * 1.5).rgb);
+        float tm = luma(texture2D(uFrame, uv + vec2(0.0, px.y) * 1.5).rgb);
+        float tr = luma(texture2D(uFrame, uv + vec2(px.x, px.y) * 1.5).rgb);
+        float ml = luma(texture2D(uFrame, uv + vec2(-px.x, 0.0) * 1.5).rgb);
+        float mr = luma(texture2D(uFrame, uv + vec2(px.x, 0.0) * 1.5).rgb);
+        float bl = luma(texture2D(uFrame, uv + vec2(-px.x, -px.y) * 1.5).rgb);
+        float bm = luma(texture2D(uFrame, uv + vec2(0.0, -px.y) * 1.5).rgb);
+        float br = luma(texture2D(uFrame, uv + vec2(px.x, -px.y) * 1.5).rgb);
+        float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+        float gy = (tl + 2.0 * tm + tr) - (bl + 2.0 * bm + br);
+        float g = length(vec2(gx, gy));
+        vec3 hue = c / max(max(c.r, max(c.g, c.b)), 0.05);
+        c = c * 0.25 + hue * smoothstep(0.02, 0.25, g) * 1.6;
+    #endif
+
+    #ifdef GRADE
+        c = mix(vec3(luma(c)), c, saturation);
+        c = (c - 0.5) * contrast + 0.5;
+        if (variation > 0.0) {
+            float nz = noise(uv * 3.0 + vec2(time * 0.07, -time * 0.05));
+            c = hueRotate(c, (nz - 0.5) * 6.2831853 * variation);
+        }
+        c = max(c, 0.0);
+    #endif
+
+    #ifdef GAMMA
+        c = max(c, 0.0);
+        if (gammaMode < 0.5) {
+            c = pow(c, vec3(0.9));
+        } else if (gammaMode < 1.5) {
+            c = pow(1.0 - exp(-c * 1.8), vec3(0.8));
+        } else if (gammaMode < 2.5) {
+            c = pow(c, vec3(1.5)) * 0.9;
+        } else {
+            c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
+            c = mix(c * vec3(0.92, 1.02, 1.06), c * vec3(1.08, 1.0, 0.9), smoothstep(0.2, 0.8, luma(c)));
+        }
+    #endif
+
+    #ifdef FILM
+        c *= vec3(1.06, 1.0, 0.92);
+        c *= mix(0.55, 1.0, smoothstep(0.95, 0.35, length(vUv - 0.5)));
+        c += (hash(vUv * resolution + vec2(time * 61.0, time * 37.0)) - 0.5) * 0.06;
+    #endif
+
+    #ifdef INVERT
+        c = 1.0 - clamp(c, 0.0, 1.0);
+    #endif
+
+    #ifdef MOTION
+        vec2 huv = vUv;
+        if (motionStyle > 0.5 && motionStyle < 1.5) {
+            // Fluid: echoes drift and slowly rotate
+            vec2 d = vUv - 0.5;
+            float a = 0.012 * sin(time * 0.3);
+            huv = 0.5 + vec2(d.x * cos(a) - d.y * sin(a), d.x * sin(a) + d.y * cos(a)) * 0.996 + vec2(0.0, 0.0012);
+        } else if (motionStyle > 1.5) {
+            // Dramatic: echoes zoom outward like a tunnel and shift hue
+            huv = 0.5 + (vUv - 0.5) * 0.985;
+        }
+        vec3 h = texture2D(uHistory, huv).rgb;
+        if (motionStyle > 1.5) h = hueRotate(h, 0.06);
+        c = max(c, h * motionMix);
+    #endif
+
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }
+`;
+
 
 const bloomPrefilterShader = compileShader(gl.FRAGMENT_SHADER, `
     precision mediump float;
@@ -2078,6 +2560,7 @@ const pressureProgram        = new Program(baseVertexShader, pressureShader);
 const gradienSubtractProgram = new Program(baseVertexShader, gradientSubtractShader);
 
 const displayMaterial = new Material(baseVertexShader, displayShaderSource);
+const postMaterial = new Material(baseVertexShader, postShaderSource);
 
 function initFramebuffers () {
     let simRes = getResolution(config.SIM_RESOLUTION);
@@ -2123,6 +2606,10 @@ function initBloomFramebuffers () {
     const filtering = ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
 
     bloom = createFBO(res.width, res.height, rgba.internalFormat, rgba.format, texType, filtering);
+
+    let glowRes = getResolution(160);
+    glowFBO = createFBO(glowRes.width, glowRes.height, rgba.internalFormat, rgba.format, texType, filtering);
+    glowTemp = createFBO(glowRes.width, glowRes.height, rgba.internalFormat, rgba.format, texType, filtering);
 
     bloomFramebuffers.length = 0;
     for (let i = 0; i < config.BLOOM_ITERATIONS; i++)
@@ -2269,6 +2756,12 @@ function updateKeywords () {
     if (config.BLOOM) displayKeywords.push("BLOOM");
     if (config.SUNRAYS) displayKeywords.push("SUNRAYS");
     if (config.BLACKLIGHT) displayKeywords.push("BLACKLIGHT");
+    if (config.SPECULAR) displayKeywords.push("SPECULAR");
+    if (config.REFRACTION > 0) displayKeywords.push("REFRACTION");
+    if (config.REFLECTION > 0) displayKeywords.push("REFLECTION");
+    if (config.DEPTH > 0) displayKeywords.push("DEPTH");
+    if (config.GLOW_INTENSITY > 0) displayKeywords.push("GLOW");
+    if (config.FLARE) displayKeywords.push("FLARE");
     displayMaterial.setKeywords(displayKeywords);
 }
 
@@ -2297,7 +2790,7 @@ function update () {
         for (let i = 0; i < substeps; i++)
             step(simDt / substeps);
     }
-    render(null);
+    render(null, dt);
     syncToolbar();
     requestAnimationFrame(update);
 }
@@ -2494,13 +2987,20 @@ function applyDyeEdges (dt) {
     dye.swap();
 }
 
-function render (target) {
-    if (config.BLOOM)
+function render (target, dt) {
+    if (config.BLOOM || config.FLARE)
         applyBloom(dye.read, bloom);
     if (config.SUNRAYS) {
         applySunrays(dye.read, dye.write, sunrays);
         blur(sunrays, sunraysTemp, 1);
     }
+    if (config.GLOW_INTENSITY > 0)
+        applyGlow();
+
+    // Screen filters render the frame offscreen first, then post-process it
+    const usePost = target == null && postKeywords().length > 0;
+    if (usePost) ensurePostFramebuffers();
+    const dest = usePost ? frameFBO : target;
 
     if (target == null || !config.TRANSPARENT) {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -2510,11 +3010,20 @@ function render (target) {
         gl.disable(gl.BLEND);
     }
 
+    if (usePost) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo);
+        gl.viewport(0, 0, dest.width, dest.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+    }
     if (!config.TRANSPARENT)
-        drawBackground(target);
+        drawBackground(dest);
     if (target == null && config.TRANSPARENT)
-        drawCheckerboard(target);
-    drawDisplay(target);
+        drawCheckerboard(dest);
+    drawDisplay(dest);
+
+    if (usePost)
+        runPost(dt || 0.016);
 }
 
 function drawColor (target, color) {
@@ -2544,18 +3053,39 @@ function drawDisplay (target) {
     let width = target == null ? gl.drawingBufferWidth : target.width;
     let height = target == null ? gl.drawingBufferHeight : target.height;
 
+    updateKeywords();
     displayMaterial.bind();
-    if (config.SHADING)
-        gl.uniform2f(displayMaterial.uniforms.texelSize, 1.0 / width, 1.0 / height);
-    gl.uniform1i(displayMaterial.uniforms.uTexture, dye.read.attach(0));
+    const u = displayMaterial.uniforms;
+    gl.uniform2f(u.texelSize, 1.0 / width, 1.0 / height);
+    gl.uniform1i(u.uTexture, dye.read.attach(0));
+    if (config.BLOOM || config.FLARE)
+        gl.uniform1i(u.uBloom, bloom.attach(1));
     if (config.BLOOM) {
-        gl.uniform1i(displayMaterial.uniforms.uBloom, bloom.attach(1));
-        gl.uniform1i(displayMaterial.uniforms.uDithering, ditheringTexture.attach(2));
+        gl.uniform1i(u.uDithering, ditheringTexture.attach(2));
         let scale = getTextureScale(ditheringTexture, width, height);
-        gl.uniform2f(displayMaterial.uniforms.ditherScale, scale.x, scale.y);
+        gl.uniform2f(u.ditherScale, scale.x, scale.y);
     }
     if (config.SUNRAYS)
-        gl.uniform1i(displayMaterial.uniforms.uSunrays, sunrays.attach(3));
+        gl.uniform1i(u.uSunrays, sunrays.attach(3));
+    if (config.GLOW_INTENSITY > 0 && glowFBO) {
+        gl.uniform1i(u.uGlow, glowFBO.attach(4));
+        gl.uniform1f(u.glowIntensity, config.GLOW_INTENSITY / 100 * 1.5);
+    }
+    const spec = SPECULAR_STYLES[config.SPECULAR_STYLE] || SPECULAR_STYLES['Glossy'];
+    gl.uniform1f(u.specularPower, spec[0]);
+    gl.uniform1f(u.specularStrength, spec[1]);
+    gl.uniform1f(u.refraction, config.REFRACTION / 100 * 0.02);
+    gl.uniform1f(u.reflection, config.REFLECTION / 100 * 0.8);
+    gl.uniform1f(u.transparency, config.TRANSPARENCY / 100 * 0.9);
+    gl.uniform1f(u.depth, config.DEPTH / 100);
+    gl.uniform1f(u.flareStyle, FLARE_STYLES.indexOf(config.FLARE_STYLE));
+    gl.uniform1f(u.blIntensity, config.BLACKLIGHT_INTENSITY / 100);
+    gl.uniform1f(u.fluorescence, config.FLUORESCENCE / 100);
+    const uv = uvColor();
+    gl.uniform1f(u.uvTint, uv ? 1 : 0);
+    gl.uniform3f(u.uvColor, uv ? uv[0] : 0, uv ? uv[1] : 0, uv ? uv[2] : 0);
+    gl.uniform3f(u.envTop, 0.55, 0.65, 0.85);
+    gl.uniform3f(u.envBottom, 0.06, 0.05, 0.08);
     blit(target);
 }
 
@@ -2757,7 +3287,7 @@ window.addEventListener('keydown', e => {
         case 'KeyC': cyclePalette(); break;
         case 'KeyA': toggleMode('AUTOPLAY', 'Auto-play'); break;
         case 'KeyV': toggleMode('VORTEX', 'Vortex'); break;
-        case 'KeyM': toggleMode('MIRROR', 'Mirror'); break;
+        case 'KeyM': cycleMirror(); break;
         case 'KeyK': toggleMode('KALEIDOSCOPE', 'Kaleidoscope'); break;
         case 'KeyB': toggleMode('BLACKLIGHT', 'Blacklight'); break;
         case 'KeyT': toggleMode('TRAILS', 'Color trails'); break;
