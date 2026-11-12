@@ -46,8 +46,10 @@
             /* ---------- Control panel theme ---------- */
 
             :root {
-                --ff-glass: rgba(11, 11, 19, 0.74);
-                --ff-glass-solid: rgba(13, 13, 22, 0.94);
+                --ff-glass: rgba(10, 10, 18, 0.16);
+                --ff-glass-solid: rgba(8, 8, 14, 0.78);
+                --ff-ink: rgba(6, 6, 12, 0.64);         /* dark backing behind text */
+                --ff-ink-soft: rgba(6, 6, 12, 0.48);
                 --ff-line: rgba(255, 255, 255, 0.07);
                 --ff-text: #ecebf5;
                 --ff-dim: rgba(236, 235, 245, 0.6);
@@ -74,14 +76,16 @@
                 overflow-y: auto;
                 overscroll-behavior: contain;
                 border-radius: 18px;
-                background: var(--ff-glass);
-                -webkit-backdrop-filter: blur(22px) saturate(170%);
-                backdrop-filter: blur(22px) saturate(170%);
-                border: 1px solid rgba(255, 255, 255, 0.09);
-                box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(139, 92, 246, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+                background:
+                    linear-gradient(160deg, rgba(139, 92, 246, 0.12), rgba(10, 10, 18, 0) 38%, rgba(10, 10, 18, 0) 70%, rgba(34, 211, 238, 0.08)),
+                    var(--ff-glass);
+                -webkit-backdrop-filter: blur(3px) saturate(150%);
+                backdrop-filter: blur(3px) saturate(150%);
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                box-shadow: 0 22px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(139, 92, 246, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.1);
                 color: var(--ff-text);
                 font: 500 12.5px/1.2 var(--ff-font);
-                text-shadow: none;
+                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
                 transition: width 0.25s ease;
                 scrollbar-width: thin;
                 scrollbar-color: rgba(139, 92, 246, 0.5) transparent;
@@ -128,6 +132,8 @@
                 box-sizing: border-box;
                 border: 0;
                 background: var(--ff-glass-solid);
+                -webkit-backdrop-filter: blur(14px) saturate(160%);
+                backdrop-filter: blur(14px) saturate(160%);
                 color: inherit;
                 font: inherit;
                 text-align: left;
@@ -269,9 +275,11 @@
                 height: 56px;
                 margin: 0;
                 padding: 0 2px;
-                border: 1px solid rgba(255, 255, 255, 0.07);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 13px;
-                background: rgba(255, 255, 255, 0.04);
+                background: var(--ff-ink);
+                -webkit-backdrop-filter: blur(8px);
+                backdrop-filter: blur(8px);
                 color: var(--ff-text);
                 font: 600 10px/1 var(--ff-font);
                 letter-spacing: 0.03em;
@@ -298,7 +306,7 @@
             }
 
             .ff-q:hover {
-                background: rgba(255, 255, 255, 0.08);
+                background: rgba(14, 14, 26, 0.78);
                 border-color: rgba(34, 211, 238, 0.35);
                 box-shadow: 0 0 16px rgba(34, 211, 238, 0.16);
             }
@@ -326,7 +334,7 @@
                 line-height: 36px;
                 padding: 0 12px 0 16px;
                 background: transparent;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             }
 
             html body .dg .cr {
@@ -335,20 +343,30 @@
             }
 
             html body .dg .cr:hover {
-                background: rgba(255, 255, 255, 0.035);
+                background: rgba(6, 6, 12, 0.22);
             }
 
             html body .dg .property-name {
-                width: 44%;
+                box-sizing: border-box;
+                width: auto;
+                max-width: 43%;
+                height: 22px;
+                margin-top: 7px;
+                padding: 0 9px;
                 overflow: hidden;
-                color: var(--ff-dim);
+                border-radius: 7px;
+                background: var(--ff-ink);
+                color: rgba(236, 235, 245, 0.86);
                 font-weight: 500;
+                line-height: 22px;
                 letter-spacing: 0.01em;
+                white-space: nowrap;
                 text-overflow: ellipsis;
             }
 
             html body .dg .c {
-                width: 56%;
+                float: right;
+                width: 55%;
             }
 
             /* Text and number boxes */
@@ -358,9 +376,9 @@
                 height: 24px;
                 margin-top: 6px;
                 padding: 0 7px;
-                border: 1px solid transparent;
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 8px;
-                background: rgba(255, 255, 255, 0.06);
+                background: var(--ff-ink);
                 color: var(--ff-text);
                 font: 500 11.5px/22px var(--ff-mono);
                 text-align: right;
@@ -375,7 +393,7 @@
             }
 
             html body .dg .c input[type=text]:hover {
-                background: rgba(255, 255, 255, 0.09);
+                background: rgba(14, 14, 26, 0.78);
             }
 
             html body .dg .c input[type=text]:focus {
@@ -398,7 +416,8 @@
                 margin: 15px 8% 0 0;
                 overflow: visible;
                 border-radius: 6px;
-                background: rgba(255, 255, 255, 0.1);
+                background: var(--ff-ink);
+                box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
                 cursor: ew-resize;
                 touch-action: none;
             }
@@ -435,7 +454,7 @@
             }
 
             html body .dg .c .slider:hover {
-                background: rgba(255, 255, 255, 0.14);
+                background: rgba(14, 14, 26, 0.8);
             }
 
             html body .dg .c .slider:hover .slider-fg {
@@ -457,7 +476,8 @@
                 height: 22px;
                 margin: 7px 0 0;
                 border-radius: 22px;
-                background: rgba(255, 255, 255, 0.12);
+                background: var(--ff-ink);
+                box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
                 vertical-align: top;
                 cursor: pointer;
                 outline: none;
@@ -500,9 +520,9 @@
                 height: 26px;
                 margin-top: 5px;
                 padding: 0 26px 0 10px;
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 8px;
-                background: rgba(255, 255, 255, 0.06) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2322d3ee' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center / 10px 6px;
+                background: var(--ff-ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2322d3ee' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center / 10px 6px;
                 color: var(--ff-text);
                 font: 500 12px var(--ff-font);
                 outline: none;
@@ -510,7 +530,7 @@
             }
 
             html body .dg .c select:hover {
-                background-color: rgba(255, 255, 255, 0.09);
+                background-color: rgba(14, 14, 26, 0.8);
             }
 
             html body .dg .c select:focus {
@@ -530,7 +550,8 @@
             }
 
             html body .dg .cr.function .property-name {
-                width: 100%;
+                width: auto;
+                max-width: calc(100% - 30px);
                 color: var(--ff-text);
                 font-weight: 600;
             }
@@ -551,7 +572,7 @@
             }
 
             html body .dg .cr.function:hover {
-                background: linear-gradient(90deg, rgba(139, 92, 246, 0.16), rgba(34, 211, 238, 0.06));
+                background: linear-gradient(90deg, rgba(139, 92, 246, 0.22), rgba(34, 211, 238, 0.08));
             }
 
             html body .dg .cr.function:hover::after {
@@ -588,7 +609,7 @@
                 margin: 0;
                 padding: 0 34px 0 46px;
                 border-bottom: 1px solid var(--ff-line);
-                background: none !important;
+                background: var(--ff-ink) !important;
                 color: var(--ff-text);
                 font: 700 11px/42px var(--ff-font);
                 letter-spacing: 0.15em;
@@ -597,7 +618,7 @@
             }
 
             html body .dg li.title:hover {
-                background: rgba(255, 255, 255, 0.035) !important;
+                background: rgba(14, 14, 26, 0.74) !important;
             }
 
             html body .dg li.title::after {
@@ -663,7 +684,7 @@
             html body .dg li.folder li.folder li.title {
                 height: 36px;
                 padding-left: 52px;
-                background: rgba(255, 255, 255, 0.025) !important;
+                background: var(--ff-ink-soft) !important;
                 color: var(--ff-dim);
                 font-size: 10.5px;
                 line-height: 36px;
@@ -672,6 +693,10 @@
 
             html body .dg li.folder li.folder ul:not(.closed) > li.title {
                 color: var(--ff-text);
+            }
+
+            html body .dg li.folder li.folder li.title:hover {
+                background: rgba(14, 14, 26, 0.66) !important;
             }
 
             html body .dg li.folder li.folder li.title .ff-ico {
@@ -909,6 +934,6 @@
         </div>
 
 
-        <script src="./script.js?v=2026-11-12d"></script>
+        <script src="./script.js?v=2026-11-12e"></script>
     </body>
 </html>
