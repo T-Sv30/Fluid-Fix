@@ -288,6 +288,7 @@ function updatePalette (dt) {
         if (paletteHold >= config.TRANSITION_TIME) {
             const next = nextPaletteName();
             setPalette(next, Math.min(4, config.TRANSITION_TIME * 0.5));
+            absorbAutomaticChange();
             showToast('Palette · ' + next);
         }
     }
@@ -602,6 +603,8 @@ function pointerPrototype () {
 
 let pointers = [];
 let splatStack = [];
+// Splats are queued and applied in batches the next time anything reads the fluid
+const splatQueue = { velocity: [], dye: [] };
 pointers.push(new pointerPrototype());
 
 const { gl, ext } = getWebGLContext(canvas);
@@ -772,6 +775,7 @@ function cycleSetting (key, list, label) {
 // Applies a local effect around (x, y) on velocity and/or dye, honoring Mirror/Kaleidoscope.
 // radial/tangential add velocity (texels/s), warp moves color (+ away, - toward), fade erases color.
 function pointEffect (x, y, opts) {
+    flushSplats();
     const radius = correctRadius(config.SPLAT_RADIUS * splatRadiusScale * (opts.area || 4) / 100.0);
     symmetryCopies(x, y, 0, 0).forEach(c => {
         const spin = c[4] ? -1 : 1;
@@ -786,6 +790,7 @@ function pointEffect (x, y, opts) {
             gl.uniform1f(u.tangential, (opts.tangential || 0) * spin);
             gl.uniform1f(u.warp, 0);
             gl.uniform1f(u.fade, opts.velocityFade || 0);
+            gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
             blit(velocity.write);
             velocity.swap();
         }
@@ -800,6 +805,7 @@ function pointEffect (x, y, opts) {
             gl.uniform1f(u.tangential, 0);
             gl.uniform1f(u.warp, opts.warp || 0);
             gl.uniform1f(u.fade, opts.fade || 0);
+            gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
             blit(dye.write);
             dye.swap();
         }
@@ -896,8 +902,10 @@ function updateTouches (dt) {
         const x = p.texcoordX, y = p.texcoordY;
         // Reverse Flow: the fluid moves against your finger
         const dirSign = config.SIM_MODE === 'Reverse Flow' ? -1 : 1;
-        const vx = p.deltaX * config.SPLAT_FORCE * force * dirSign;
-        const vy = p.deltaY * config.SPLAT_FORCE * force * dirSign;
+        // Only this frame's movement pushes the fluid; a finger held still adds no push
+        const vx = moved ? p.deltaX * config.SPLAT_FORCE * force * dirSign : 0;
+        const vy = moved ? p.deltaY * config.SPLAT_FORCE * force * dirSign : 0;
+        p.frameMotion = moved ? Math.hypot(p.deltaX, p.deltaY) : 0;
 
         switch (config.GESTURE) {
             case 'Push':
@@ -973,7 +981,7 @@ let shakeOffset = { x: 0, y: 0 };
 function postKeywords () {
     const k = [];
     if (config.CHROMATIC_ABERRATION > 0 || config.FRINGE) k.push('CHROMA');
-    if (config.SHAKE) k.push('SHAKE');
+    if (config.SHAKE && !prefersReducedMotion()) k.push('SHAKE');
     if (config.PIXELS) k.push('PIXELATE');
     if (config.BLUR > 0) k.push('BLUR');
     if (config.SHARPEN > 0) k.push('SHARPEN');
@@ -987,9 +995,16 @@ function postKeywords () {
     return k;
 }
 
+function prefersReducedMotion () {
+    try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+    catch (e) { return false; }
+}
+
 function ensurePostFramebuffers () {
     const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
     if (frameFBO && frameFBO.width === w && frameFBO.height === h) return;
+    destroyFBO(frameFBO);
+    destroyDoubleFBO(historyFBO);
     frameFBO = createFBO(w, h, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
     historyFBO = createDoubleFBO(w, h, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
 }
@@ -998,7 +1013,7 @@ function ensurePostFramebuffers () {
 function updateShake (dt) {
     let motion = 0;
     pointers.forEach(p => {
-        if (p.down) motion += Math.hypot(p.deltaX, p.deltaY);
+        if (p.down) motion += p.frameMotion || 0;
     });
     shakeEnergy = Math.min(1.5, shakeEnergy * Math.exp(-4 * dt) + motion * 6);
     const amp = (SHAKE_STYLES[config.SHAKE_STYLE] || 0.008) * (0.15 + shakeEnergy);
@@ -1029,7 +1044,7 @@ function runPost (dt) {
     gl.uniform1f(u.contrast, 0.3 + config.CONTRAST / 100 * 1.4);
     gl.uniform1f(u.variation, config.COLOR_VARIATION / 100 * 0.5);
     gl.uniform1f(u.gammaMode, GAMMA_MODES.indexOf(config.GAMMA_MODE));
-    gl.uniform1f(u.motionMix, 0.5 + config.MOTION_INTENSITY / 100 * 0.47);
+    gl.uniform1f(u.motionMix, Math.pow(0.5 + config.MOTION_INTENSITY / 100 * 0.47, Math.max(dt, 0) * 60));
     gl.uniform1f(u.motionStyle, MOTION_STYLES.indexOf(config.MOTION_STYLE));
     if (config.MOTION) {
         blit(historyFBO.write);
@@ -1345,7 +1360,7 @@ const particleFragmentSource = `
         } else if (style < 5.5) {          // Sparks: sharp tapered streaks that flicker
             float taper = 1.0 - abs(q.x);
             a = taper * (1.0 - smoothstep(0.0, 0.6 * taper + 0.05, abs(q.y)));
-            a *= 0.6 + 0.8 * phash(vec2(vSeed * 91.0, floor(time * 24.0)));
+            a *= 0.75 + 0.35 * sin(time * 9.0 + vSeed * 60.0);
             col = mix(col, vec3(1.0), 0.45);
         } else if (style < 6.5) {          // Bubbles: thin rim, highlight, faint body
             float rim = smoothstep(0.72, 0.88, d) * (1.0 - smoothstep(0.92, 1.0, d));
@@ -1439,7 +1454,8 @@ function linkParticleProgram (vsSource, fsSource) {
 
 // Particles need float textures we can render into, and texture reads in the vertex shader
 function detectParticleSupport () {
-    if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < 2) return false;
+    // The particle vertex shader reads three textures (state, velocity, color)
+    if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < 3) return false;
     let internalFormat, type;
     if (isWebGL2Context) {
         if (!gl.getExtension('EXT_color_buffer_float')) return false;
@@ -1532,8 +1548,10 @@ function ensureParticleTargets () {
         particles.density = createFBO(res.width, res.height, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
     }
     const tw = Math.max(1, gl.drawingBufferWidth >> 1), th = Math.max(1, gl.drawingBufferHeight >> 1);
-    if (config.PARTICLE_TRAILS && (!particles.trail || particles.trail.read.width !== tw || particles.trail.read.height !== th))
+    if (config.PARTICLE_TRAILS && (!particles.trail || particles.trail.read.width !== tw || particles.trail.read.height !== th)) {
+        destroyDoubleFBO(particles.trail);
         particles.trail = createDoubleFBO(tw, th, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
+    }
 }
 
 function particlesReady () {
@@ -1579,6 +1597,7 @@ function drawParticleQuads (program, mode, count) {
 
 function updateParticles (dt) {
     if (!particlesReady()) return;
+    flushSplats();
     particles.time += dt;
     const step = config.PAUSED ? 0 : dt * pctSpeedTo(config.PARTICLE_SPEED);
     const active = particleActiveCount();
@@ -1674,7 +1693,7 @@ function renderParticles (target) {
         gl.disable(gl.BLEND);
         particles.programs.fade.bind();
         gl.uniform1i(particles.programs.fade.uniforms.uTexture, t.read.attach(0));
-        gl.uniform1f(particles.programs.fade.uniforms.keep, config.PAUSED ? 1 : 0.9);
+        gl.uniform1f(particles.programs.fade.uniforms.keep, config.PAUSED ? 1 : Math.pow(0.9, frameDt * 60));
         blit(t.write);
         t.swap();
 
@@ -1962,6 +1981,8 @@ function applyPerformanceMode (name) {
 function effFpsLimit () {
     let f = FPS_LIMITS[config.FPS_LIMIT] || 0;
     if (config.BATTERY_SAVER) f = f ? Math.min(f, 30) : 30;
+    // While frozen and untouched the picture barely changes, so save battery
+    if (config.PAUSED && !pointers.some(p => p.down)) f = f ? Math.min(f, 30) : 30;
     return f;
 }
 
@@ -2130,11 +2151,78 @@ function snapshotValues () {
     return JSON.parse(JSON.stringify(out));
 }
 
+// Allowed values for every setting a preset can carry. Anything else is dropped,
+// so a shared preset can never freeze the app or switch features off by accident.
+const VALUE_RANGES = {
+    SPLAT_RADIUS: [0.01, 1], DENSITY_DISSIPATION: [0, 15], VELOCITY_DISSIPATION: [0, 4], CURL: [0, 50],
+    PRESSURE: [0, 1], SPLAT_FORCE: [0, 20000], COLOR_UPDATE_SPEED: [0, 50], BLOOM_INTENSITY: [0, 2],
+    BLOOM_THRESHOLD: [0, 1], BLOOM_SOFT_KNEE: [0, 1], SUNRAYS_WEIGHT: [0, 1], SPEED: [0, 3],
+    INTENSITY: [0, 3], RAINBOW_SPEED: [0, 1], KALEIDO_SEGMENTS: [2, 10], TRANSITION_TIME: [3, 30],
+};
+const INTEGER_KEYS = new Set(['KALEIDO_SEGMENTS']);
+const TEXT_LIMITS = { TEXT_CONTENT: 200 };
+
+function valueChoices (key) {
+    switch (key) {
+        case 'PALETTE': return PALETTE_NAMES;
+        case 'BACKGROUND': return BACKGROUND_NAMES;
+        case 'PRESSURE_LEVEL': return Object.keys(PRESSURE_LEVELS);
+        case 'FLOW_DIRECTION': return Object.keys(FLOW_DIRECTIONS);
+        case 'EDGE': return EDGE_MODES;
+        case 'CORNER': return CORNER_MODES;
+        case 'GESTURE': return GESTURE_MODES;
+        case 'INJECTION': return INJECTION_MODES;
+        case 'FORCE_FIELD': return FORCE_FIELDS;
+        case 'MIRROR_MODE': return MIRROR_MODES;
+        case 'FLARE_STYLE': return FLARE_STYLES;
+        case 'GAMMA_MODE': return GAMMA_MODES;
+        case 'SPECULAR_STYLE': return Object.keys(SPECULAR_STYLES);
+        case 'UV_MODE': return Object.keys(UV_MODES);
+        case 'PIXEL_MODE': return Object.keys(PIXEL_MODES);
+        case 'SHAKE_STYLE': return Object.keys(SHAKE_STYLES);
+        case 'MOTION_STYLE': return MOTION_STYLES;
+        case 'PARTICLE_AMOUNT': return Object.keys(PARTICLE_AMOUNTS);
+        case 'PARTICLE_STYLE': return PARTICLE_STYLES;
+        case 'PARTICLE_COLOR_MODE': return PARTICLE_COLOR_MODES;
+        case 'SIM_MODE': return SIM_MODE_NAMES;
+        case 'TEXT_MODE': return TEXT_MODES;
+        case 'TEXT_FONT': return Object.keys(TEXT_FONTS);
+    }
+    return null;
+}
+
+function validValue (key, value) {
+    const current = config[key];
+    if (typeof value !== typeof current) return undefined;
+    if (typeof current === 'boolean') return value;
+    if (typeof current === 'number') {
+        if (!isFinite(value)) return undefined;
+        const range = VALUE_RANGES[key] || [0, 100];
+        let v = Math.min(range[1], Math.max(range[0], value));
+        if (INTEGER_KEYS.has(key)) v = Math.round(v);
+        return v;
+    }
+    if (typeof current === 'string') {
+        const choices = valueChoices(key);
+        if (choices) return choices.indexOf(value) !== -1 ? value : undefined;
+        return value.slice(0, TEXT_LIMITS[key] || 200);
+    }
+    if (current && typeof current === 'object' && 'r' in current) {
+        if (!value || typeof value !== 'object') return undefined;
+        const ch = v => (typeof v === 'number' && isFinite(v)) ? Math.min(255, Math.max(0, v)) : null;
+        const r = ch(value.r), g = ch(value.g), b = ch(value.b);
+        return r === null || g === null || b === null ? undefined : { r, g, b };
+    }
+    return undefined;
+}
+
 function cleanValues (values) {
     const out = {};
-    Object.keys(values || {}).forEach(k => {
-        if (!SNAPSHOT_EXCLUDE.has(k) && config.hasOwnProperty(k) && typeof values[k] === typeof config[k])
-            out[k] = values[k];
+    if (!values || typeof values !== 'object') return out;
+    Object.keys(values).forEach(k => {
+        if (SNAPSHOT_EXCLUDE.has(k) || !config.hasOwnProperty(k)) return;
+        const v = validValue(k, values[k]);
+        if (v !== undefined) out[k] = v;
     });
     return JSON.parse(JSON.stringify(out));
 }
@@ -2169,8 +2257,19 @@ function initPresets () {
     DEFAULT_VALUES = snapshotValues();
     loadStoredPresets();
     const saved = storeGet('fluidfix.currentPreset');
-    if (saved && saved !== 'Default' && presetNames().indexOf(saved) !== -1) selectPreset(saved, true);
-    else selectPreset('Default', false);
+    try {
+        if (saved && saved !== 'Default' && presetNames().indexOf(saved) !== -1) selectPreset(saved, true);
+        else selectPreset('Default', false);
+    } catch (e) {
+        console.warn('Could not restore the last preset; starting from Default', e);
+        selectPreset('Default', true);
+    }
+    // Bring back the look from before a graphics reset
+    const recover = storeGet('fluidfix.recover');
+    if (recover) {
+        storeSet('fluidfix.recover', '');
+        try { applyValues(JSON.parse(recover), false); } catch (e) { /* ignore a damaged copy */ }
+    }
     settingsHistory.lastSeen = JSON.stringify(snapshotValues());
     settingsHistory.stack = [settingsHistory.lastSeen];
     settingsHistory.index = 0;
@@ -2193,9 +2292,14 @@ const presetState = {
 function loadStoredPresets () {
     try {
         const list = JSON.parse(storeGet('fluidfix.presets') || '[]');
-        presetState.user = Array.isArray(list)
-            ? list.filter(p => p && typeof p.name === 'string' && p.values && typeof p.values === 'object')
-            : [];
+        presetState.user = [];
+        if (Array.isArray(list)) {
+            list.forEach(p => {
+                if (!p || typeof p.name !== 'string' || !p.values || typeof p.values !== 'object') return;
+                // Older or tampered entries are cleaned the same way as imports
+                presetState.user.push({ name: uniqueName(safeName(p.name)), values: cleanValues(p.values) });
+            });
+        }
     } catch (e) {
         presetState.user = [];
     }
@@ -2204,6 +2308,17 @@ function loadStoredPresets () {
 function saveStoredPresets () {
     storeSet('fluidfix.presets', JSON.stringify(presetState.user));
     storeSet('fluidfix.currentPreset', presetState.current);
+}
+
+// Preset names end up inside the control panel's HTML, so only plain characters are allowed
+function safeName (name, fallback) {
+    const clean = String(name == null ? '' : name)
+        .replace(/[<>&"'`\\]/g, '')
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 40);
+    return clean || fallback || 'Preset';
 }
 
 function presetNames () {
@@ -2260,14 +2375,14 @@ function presetNew () {
 }
 
 function presetClone () {
-    const name = uniqueName(presetState.current + ' copy');
+    const name = uniqueName(safeName(presetState.current + ' copy'));
     presetState.user.push({ name, values: snapshotValues() });
     selectPreset(name, false);
     showToast('Cloned as ' + name);
 }
 
 function presetRename (newName) {
-    newName = String(newName || '').trim().slice(0, 40);
+    newName = safeName(newName, '');
     if (!newName || newName === presetState.current) { ui7.presetName = presetState.current; refreshGUI(); return; }
     if (isBuiltin(presetState.current)) {
         ui7.presetName = presetState.current;
@@ -2344,7 +2459,7 @@ function importPresetText (text) {
         modalError('No Fluid Fix settings found in that text.');
         return;
     }
-    const name = uniqueName(String(data.name || 'Imported').trim().slice(0, 40) || 'Imported');
+    const name = uniqueName(safeName(data.name, 'Imported'));
     presetState.user.push({ name, values });
     closeModal();
     selectPreset(name, true);
@@ -2374,6 +2489,14 @@ function recordHistory (dt) {
     settingsHistory.index = settingsHistory.stack.length - 1;
 }
 
+// Folds a change the app made by itself into the current undo step instead of adding a new one
+function absorbAutomaticChange () {
+    if (settingsHistory.index < 0) return;
+    const s = JSON.stringify(snapshotValues());
+    settingsHistory.stack[settingsHistory.index] = s;
+    settingsHistory.lastSeen = s;
+}
+
 function undo () {
     if (settingsHistory.index <= 0) { showToast('Nothing to undo'); return; }
     settingsHistory.index--;
@@ -2397,6 +2520,8 @@ function clearFluid () {
                      displacement && displacement.read, displacement && displacement.write,
                      historyFBO && historyFBO.read, historyFBO && historyFBO.write,
                      particles.trail && particles.trail.read, particles.trail && particles.trail.write];
+    splatQueue.velocity.length = 0;
+    splatQueue.dye.length = 0;
     gl.clearColor(0, 0, 0, 0);
     targets.forEach(t => {
         if (!t) return;
@@ -2479,12 +2604,14 @@ function downloadText (filename, text) {
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    // Give the browser time to start the download before releasing the file
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
 }
 
 // ---------- Modal ----------
 
 let modalButtons = [];
+let modalReturnFocus = null;
 
 function openModal (opts) {
     const m = document.getElementById('modal');
@@ -2515,6 +2642,7 @@ function openModal (opts) {
         });
         actions.appendChild(btn);
     });
+    if (m.hidden) modalReturnFocus = document.activeElement;
     m.hidden = false;
     setTimeout(() => {
         if (!input.hidden && !input.readOnly) input.focus();
@@ -2524,7 +2652,12 @@ function openModal (opts) {
 
 function closeModal () {
     const m = document.getElementById('modal');
-    if (m) m.hidden = true;
+    if (!m || m.hidden) return;
+    m.hidden = true;
+    if (modalReturnFocus && modalReturnFocus.focus) {
+        try { modalReturnFocus.focus(); } catch (e) { /* element is gone */ }
+    }
+    modalReturnFocus = null;
 }
 
 function modalError (text) {
@@ -2540,7 +2673,22 @@ function modalOpen () {
     const m = document.getElementById('modal');
     if (!m || !m.addEventListener) return;
     m.addEventListener('click', e => { if (e.target === m) closeModal(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && modalOpen()) closeModal(); });
+    document.addEventListener('keydown', e => {
+        if (!modalOpen()) return;
+        if (e.key === 'Escape') {
+            closeModal();
+            return;
+        }
+        if (e.key === 'Tab') {
+            // Keep keyboard focus inside the dialog
+            const items = Array.from(m.querySelectorAll('textarea:not([hidden]), input:not([hidden]), button'))
+                .filter(el => !el.hidden && !el.disabled);
+            if (!items.length) return;
+            const first = items[0], last = items[items.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+    });
     const file = document.getElementById('modal-file');
     file.addEventListener('change', () => {
         const f = file.files && file.files[0];
@@ -2750,6 +2898,8 @@ function getWebGLContext (canvas) {
     const isWebGL2 = !!gl;
     if (!isWebGL2)
         gl = canvas.getContext('webgl', params) || canvas.getContext('experimental-webgl', params);
+    if (!gl)
+        fatal('Your browser or device doesn’t support WebGL, which Fluid Fix needs to draw the simulation.');
 
     let halfFloat;
     let supportLinearFiltering;
@@ -2759,6 +2909,8 @@ function getWebGLContext (canvas) {
     } else {
         halfFloat = gl.getExtension('OES_texture_half_float');
         supportLinearFiltering = gl.getExtension('OES_texture_half_float_linear');
+        if (!halfFloat)
+            fatal('This device’s graphics don’t support the floating-point textures Fluid Fix needs.');
     }
 
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
@@ -2791,6 +2943,17 @@ function getWebGLContext (canvas) {
             supportLinearFiltering
         }
     };
+}
+
+// Shows a readable message on the page and stops the script
+function fatal (message) {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;' +
+        'background:#000;color:#eee;font:16px/1.5 system-ui,-apple-system,Roboto,sans-serif;text-align:center;z-index:30';
+    box.textContent = message + ' Try a recent version of Chrome, Firefox or Safari.';
+    document.body.appendChild(box);
+    throw new Error(message);
 }
 
 function getSupportedFormat (gl, internalFormat, format, type)
@@ -2970,7 +3133,9 @@ function startGUI () {
     filtersFolder.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
     filtersFolder.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
     filtersFolder.add(config, 'INVERT').name('invert');
-    filtersFolder.add(config, 'SHAKE').name('shake');
+    filtersFolder.add(config, 'SHAKE').name('shake').onChange(v => {
+        if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
+    });
     filtersFolder.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
     filtersFolder.add(config, 'MOTION').name('motion');
     filtersFolder.add(config, 'MOTION_STYLE', MOTION_STYLES).name('motion style');
@@ -3063,10 +3228,11 @@ function captureScreenshot () {
     let texture = framebufferToTexture(target);
     texture = normalizeTexture(texture, target.width, target.height);
 
+    destroyFBO(target);
+
     let captureCanvas = textureToCanvas(texture, target.width, target.height);
     let datauri = captureCanvas.toDataURL();
     downloadURI('fluid.png', datauri);
-    URL.revokeObjectURL(datauri);
 }
 
 function framebufferToTexture (target) {
@@ -3284,16 +3450,6 @@ const clearShader = compileShader(gl.FRAGMENT_SHADER, `
 
     void main () {
         gl_FragColor = value * texture2D(uTexture, vUv);
-    }
-`);
-
-const colorShader = compileShader(gl.FRAGMENT_SHADER, `
-    precision mediump float;
-
-    uniform vec4 color;
-
-    void main () {
-        gl_FragColor = color;
     }
 `);
 
@@ -3809,6 +3965,10 @@ const sunraysShader = compileShader(gl.FRAGMENT_SHADER, `
     }
 `);
 
+// Up to SPLAT_BATCH splats are applied in one pass instead of one full-screen pass each.
+// The batch size respects the device's uniform limit.
+const SPLAT_BATCH = Math.max(1, Math.min(16, Math.floor(((gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) || 64) - 6) / 2)));
+
 const splatShader = compileShader(gl.FRAGMENT_SHADER, `
     precision highp float;
     precision highp sampler2D;
@@ -3816,18 +3976,24 @@ const splatShader = compileShader(gl.FRAGMENT_SHADER, `
     varying vec2 vUv;
     uniform sampler2D uTarget;
     uniform float aspectRatio;
-    uniform vec3 color;
-    uniform vec2 point;
-    uniform float radius;
+    uniform float wrap;
+    uniform int count;
+    uniform vec3 points[BATCH];   // x, y, radius
+    uniform vec3 colors[BATCH];
 
     void main () {
-        vec2 p = vUv - point.xy;
-        p.x *= aspectRatio;
-        vec3 splat = exp(-dot(p, p) / radius) * color;
+        vec3 sum = vec3(0.0);
+        for (int i = 0; i < BATCH; i++) {
+            if (i >= count) break;
+            vec2 p = vUv - points[i].xy;
+            if (wrap > 0.5) p -= floor(p + 0.5);   // Wrap edges: use the nearest copy across the seam
+            p.x *= aspectRatio;
+            sum += exp(-dot(p, p) / points[i].z) * colors[i];
+        }
         vec3 base = texture2D(uTarget, vUv).xyz;
-        gl_FragColor = vec4(base + splat, 1.0);
+        gl_FragColor = vec4(base + sum, 1.0);
     }
-`);
+`, ['BATCH ' + SPLAT_BATCH]);
 
 const advectionShader = compileShader(gl.FRAGMENT_SHADER, `
     precision highp float;
@@ -4156,9 +4322,11 @@ const pointForceShader = compileShader(gl.FRAGMENT_SHADER, `
     uniform float tangential;
     uniform float warp;
     uniform float fade;
+    uniform float wrap;
 
     void main () {
         vec2 d = vUv - point;
+        if (wrap > 0.5) d -= floor(d + 0.5);
         d.x *= aspectRatio;
         float r = length(d);
         float g = exp(-dot(d, d) / radius);
@@ -4411,7 +4579,6 @@ let ditheringTexture = createTextureAsync('LDR_LLL1_0.png');
 const blurProgram            = new Program(blurVertexShader, blurShader);
 const copyProgram            = new Program(baseVertexShader, copyShader);
 const clearProgram           = new Program(baseVertexShader, clearShader);
-const colorProgram           = new Program(baseVertexShader, colorShader);
 const checkerboardProgram    = new Program(baseVertexShader, checkerboardShader);
 const bloomPrefilterProgram  = new Program(baseVertexShader, bloomPrefilterShader);
 const bloomBlurProgram       = new Program(baseVertexShader, bloomBlurShader);
@@ -4461,9 +4628,19 @@ function initFramebuffers () {
     else
         velocity = resizeDoubleFBO(velocity, simRes.width, simRes.height, rg.internalFormat, rg.format, texType, filtering);
 
+    destroyFBO(divergence);
+    destroyFBO(curl);
+    destroyDoubleFBO(pressure);
     divergence = createFBO      (simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
     curl       = createFBO      (simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
     pressure   = createDoubleFBO(simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
+
+    // Targets sized from the screen shape are rebuilt on their next use
+    destroyFBO(bgBlurFBO);
+    destroyFBO(bgBlurTemp);
+    bgBlurFBO = bgBlurTemp = null;
+    destroyFBO(particles.density);
+    particles.density = null;
 
     if (displacement == null)
         displacement = createDoubleFBO(simRes.width, simRes.height, rg.internalFormat, rg.format, texType, filtering);
@@ -4482,6 +4659,10 @@ function initBloomFramebuffers () {
     const rgba = ext.formatRGBA;
     const filtering = ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
 
+    destroyFBO(bloom);
+    destroyFBO(glowFBO);
+    destroyFBO(glowTemp);
+    bloomFramebuffers.forEach(destroyFBO);
     bloom = createFBO(res.width, res.height, rgba.internalFormat, rgba.format, texType, filtering);
 
     let glowRes = getResolution(currentGlowResolution());
@@ -4508,6 +4689,8 @@ function initSunraysFramebuffers () {
     const r = ext.formatR;
     const filtering = ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
 
+    destroyFBO(sunrays);
+    destroyFBO(sunraysTemp);
     sunrays     = createFBO(res.width, res.height, r.internalFormat, r.format, texType, filtering);
     sunraysTemp = createFBO(res.width, res.height, r.internalFormat, r.format, texType, filtering);
 }
@@ -4546,6 +4729,19 @@ function createFBO (w, h, internalFormat, format, type, param) {
     };
 }
 
+// Frees a render target's GPU memory (safe to call with null)
+function destroyFBO (f) {
+    if (!f) return;
+    gl.deleteFramebuffer(f.fbo);
+    gl.deleteTexture(f.texture);
+}
+
+function destroyDoubleFBO (d) {
+    if (!d) return;
+    destroyFBO(d.read);
+    destroyFBO(d.write);
+}
+
 function createDoubleFBO (w, h, internalFormat, format, type, param) {
     let fbo1 = createFBO(w, h, internalFormat, format, type, param);
     let fbo2 = createFBO(w, h, internalFormat, format, type, param);
@@ -4580,6 +4776,7 @@ function resizeFBO (target, w, h, internalFormat, format, type, param) {
     copyProgram.bind();
     gl.uniform1i(copyProgram.uniforms.uTexture, target.attach(0));
     blit(newFBO);
+    destroyFBO(target);
     return newFBO;
 }
 
@@ -4587,6 +4784,7 @@ function resizeDoubleFBO (target, w, h, internalFormat, format, type, param) {
     if (target.width == w && target.height == h)
         return target;
     target.read = resizeFBO(target.read, w, h, internalFormat, format, type, param);
+    destroyFBO(target.write);
     target.write = createFBO(w, h, internalFormat, format, type, param);
     target.width = w;
     target.height = h;
@@ -4647,11 +4845,24 @@ initFramebuffers();
 multipleSplats(parseInt(Math.random() * 20) + 5);
 
 let lastUpdateTime = null;
+let frameDt = 1 / 60;   // seconds covered by the current frame
 let colorUpdateTimer = 0.0;
+let contextLost = false;
+
+// Android can drop the GPU context under memory pressure. Keep the current look and reload cleanly.
+canvas.addEventListener('webglcontextlost', e => {
+    e.preventDefault();
+    contextLost = true;
+    try { storeSet('fluidfix.recover', JSON.stringify(snapshotValues())); } catch (err) { /* nothing to keep */ }
+    showToast('Graphics were reset · restoring…');
+});
+canvas.addEventListener('webglcontextrestored', () => window.location.reload());
+
 initPresets();
 update();
 
 function update (timestamp) {
+    if (contextLost) return;   // resumes through a reload once the context is restored
     // One clock for everything: the browser's frame timestamp
     const now = typeof timestamp === 'number' ? timestamp : performance.now();
     if (!frameAllowed(now)) {
@@ -4663,6 +4874,7 @@ function update (timestamp) {
     perf.prevDrawn = now;
 
     const dt = calcDeltaTime(now);
+    frameDt = dt;
     updatePerformance(frameSeconds);
     if (resizeCanvas())
         initFramebuffers();
@@ -4740,6 +4952,7 @@ function applyInputs (dt) {
 }
 
 function step (dt) {
+    flushSplats();
     gl.disable(gl.BLEND);
 
     curlProgram.bind();
@@ -4888,6 +5101,7 @@ function applyDyeEdges (dt) {
 }
 
 function render (target, dt) {
+    flushSplats();
     if (config.BLOOM || config.FLARE)
         applyBloom(dye.read, bloom);
     if (config.SUNRAYS) {
@@ -4928,12 +5142,6 @@ function render (target, dt) {
 
     if (usePost)
         runPost(dt || 0.016);
-}
-
-function drawColor (target, color) {
-    colorProgram.bind();
-    gl.uniform4f(colorProgram.uniforms.color, color.r, color.g, color.b, 1);
-    blit(target);
 }
 
 function drawBackground (target) {
@@ -5084,30 +5292,51 @@ function multipleSplats (amount) {
 }
 
 function splat (x, y, dx, dy, color) {
-    splatProgram.bind();
-    gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
-    gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
-    gl.uniform2f(splatProgram.uniforms.point, x, y);
-    gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
-    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS * splatRadiusScale / 100.0));
-    blit(velocity.write);
-    velocity.swap();
-
-    gl.uniform1i(splatProgram.uniforms.uTarget, dye.read.attach(0));
-    gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
-    blit(dye.write);
-    dye.swap();
+    const radius = correctRadius(config.SPLAT_RADIUS * splatRadiusScale / 100.0);
+    splatQueue.velocity.push(x, y, radius, dx, dy, 0);
+    splatQueue.dye.push(x, y, radius, color.r, color.g, color.b);
 }
 
 function splatVelocity (x, y, dx, dy, radiusScale) {
+    const radius = correctRadius(config.SPLAT_RADIUS * (radiusScale || 1) / 100.0);
+    splatQueue.velocity.push(x, y, radius, dx, dy, 0);
+}
+
+function applySplatQueue (queue, target) {
+    const n = queue.length / 6;
+    if (!n) return;
+    const u = splatProgram.uniforms;
+    const points = new Float32Array(SPLAT_BATCH * 3);
+    const colors = new Float32Array(SPLAT_BATCH * 3);
     splatProgram.bind();
-    gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
-    gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
-    gl.uniform2f(splatProgram.uniforms.point, x, y);
-    gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
-    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS * (radiusScale || 1) / 100.0));
-    blit(velocity.write);
-    velocity.swap();
+    gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+    gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
+    for (let start = 0; start < n; start += SPLAT_BATCH) {
+        const count = Math.min(SPLAT_BATCH, n - start);
+        for (let i = 0; i < count; i++) {
+            const o = (start + i) * 6;
+            points[i * 3] = queue[o];
+            points[i * 3 + 1] = queue[o + 1];
+            points[i * 3 + 2] = queue[o + 2];
+            colors[i * 3] = queue[o + 3];
+            colors[i * 3 + 1] = queue[o + 4];
+            colors[i * 3 + 2] = queue[o + 5];
+        }
+        gl.uniform1i(u.count, count);
+        gl.uniform3fv(u['points[0]'], points);
+        gl.uniform3fv(u['colors[0]'], colors);
+        gl.uniform1i(u.uTarget, target.read.attach(0));
+        blit(target.write);
+        target.swap();
+    }
+    queue.length = 0;
+}
+
+function flushSplats () {
+    if (!splatQueue.velocity.length && !splatQueue.dye.length) return;
+    gl.disable(gl.BLEND);
+    applySplatQueue(splatQueue.velocity, velocity);
+    applySplatQueue(splatQueue.dye, dye);
 }
 
 function correctRadius (radius) {
@@ -5184,7 +5413,8 @@ window.addEventListener('touchcancel', releaseTouches);
 window.addEventListener('blur', () => pointers.forEach(updatePointerUpData));
 
 window.addEventListener('keydown', e => {
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON')) return;
+    if (e.target && e.target.closest && e.target.closest('.dg')) return;
     if (modalOpen()) return;
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault();
@@ -5361,13 +5591,4 @@ function scaleByPixelRatio (input) {
     let pixelRatio = (window.devicePixelRatio || 1) * (renderScaleFactor || 1);
     return Math.floor(input * pixelRatio);
 }
-
-function hashCode (s) {
-    if (s.length == 0) return 0;
-    let hash = 0;
-    for (let i = 0; i < s.length; i++) {
-        hash = (hash << 5) - hash + s.charCodeAt(i);
-        hash |= 0; // Convert to 32bit integer
-    }
-    return hash;
-};
+;
