@@ -22,13 +22,24 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Color trails | Dye fades about 8× slower, leaving long trails | T |
 | Blacklight | Neon-saturated colors with a UV-violet glow | B |
 | Background presets | Black, Midnight, Nebula, Deep Ocean, Ember, Forest, Charcoal, Paper, Custom (crossfades) | |
-| Speed | 0.1× to 3× simulation speed (sub-stepped to stay stable) | |
-| Intensity | 0.1× to 3× strength of every touch and emitter | |
+| Time | Simulation speed: 0% stopped, 50% normal, 100% = 3× (sub-stepped to stay stable) | |
+| Touch force | Strength of every touch and emitter: 50% normal, 100% = 3× | |
 | Freeze / resume | Stops the motion; you can still paint on the frozen image | F or P |
 | Random color on touch | Each new touch injects a burst of random colors | I |
 | Auto transitions | Smoothly crossfades to the next palette every few seconds | |
 
 Space adds random splats, and H hides the toolbar and panel.
+
+## Settings
+
+Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value. The panel is grouped like this:
+
+- **Simulation:** quality (Very Low → Ultra High), time, autoplay, radius, sim resolution, dissipation, viscosity, vorticity, gravity, pressure (Low / Norm / Max)
+- **Forces:** turbulence (animated curl noise), flow strength, swirl, pressure strength, buoyancy (50% = neutral, lower sinks, higher rises), drag, elasticity (springy wobble), flow direction (8 directions, radial outward/inward, circular), flow speed, randomness
+- **Edges:** Wall, Wrap (fluid leaving one side comes back on the other; needs WebGL2), Void (fluid flows out and vanishes), Repel; plus repel strength, repel distance, edge friction, edge bounce, edge softness, and corner behavior (Normal, Rounded, Repel, Bounce, Absorb, Wrap)
+- **Touch, Modes, Colors, Effects, Capture**
+
+Gravity, buoyancy and flow direction act on the colored fluid, so dense color sinks, rises or drifts while clear areas stay calm. In Wrap and Void modes a directional flow also moves the whole field.
 
 ## Run it
 

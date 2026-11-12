@@ -71,6 +71,25 @@ let config = {
     MIRROR: false,
     KALEIDOSCOPE: false,
     KALEIDO_SEGMENTS: 6,
+    // Stage 1 (0-100 percentages unless noted)
+    PRESSURE_LEVEL: 'Norm',
+    VISCOSITY: 0,
+    GRAVITY: 0,
+    TURBULENCE: 0,
+    FLOW_STRENGTH: 50,
+    SWIRL: 0,
+    BUOYANCY: 50,
+    ELASTICITY: 0,
+    FLOW_DIRECTION: 'None',
+    FLOW_SPEED: 30,
+    RANDOMNESS: 0,
+    EDGE: 'Wall',
+    REPEL_STRENGTH: 50,
+    REPEL_DISTANCE: 15,
+    EDGE_FRICTION: 0,
+    EDGE_BOUNCE: 0,
+    EDGE_SOFTNESS: 50,
+    CORNER: 'Normal',
 }
 
 
@@ -239,6 +258,12 @@ function dedupeCopies (copies) {
 
 function emitSplat (x, y, dx, dy, color, dyeScale) {
     const k = dyeScale == null ? 1 : dyeScale;
+    const r = config.RANDOMNESS / 100;
+    if (r > 0) {
+        const jitter = (Math.abs(dx) + Math.abs(dy) + 100) * r * 0.6;
+        dx += (Math.random() - 0.5) * 2 * jitter;
+        dy += (Math.random() - 0.5) * 2 * jitter;
+    }
     const c = { r: color.r * k, g: color.g * k, b: color.b * k };
     symmetryCopies(x, y, dx, dy).forEach(s => splat(s[0], s[1], s[2], s[3], c));
 }
@@ -419,6 +444,7 @@ function cyclePalette () {
 let guiRoot = null;
 
 function refreshGUI (gui) {
+    if (!gui) syncUI();
     gui = gui || guiRoot;
     if (!gui) return;
     gui.__controllers.forEach(c => c.updateDisplay());
@@ -494,6 +520,131 @@ if (!ext.supportLinearFiltering) {
     config.SHADING = false;
     config.BLOOM = false;
     config.SUNRAYS = false;
+}
+
+// Stage 1: core controls (0-100% sliders, extra forces, edge behavior)
+
+// Every slider in the UI is 0-100%. These map a percentage to the engine value and back.
+const pctSpeedTo = p => p <= 50 ? p / 50 : 1 + (p - 50) / 25;          // 0..1x..3x, 50% = 1x
+const pctSpeedFrom = v => v <= 1 ? v * 50 : 50 + (v - 1) * 25;
+const pctSquareTo = max => p => max * (p / 100) * (p / 100);           // finer control at the low end
+const pctSquareFrom = max => v => 100 * Math.sqrt(Math.max(v, 0) / max);
+const pctLinTo = (min, max) => p => min + (max - min) * p / 100;
+const pctLinFrom = (min, max) => v => 100 * (v - min) / (max - min);
+
+const PCT = {
+    TIME:            { cfg: 'SPEED',                to: pctSpeedTo,          from: pctSpeedFrom },
+    RADIUS:          { cfg: 'SPLAT_RADIUS',         to: pctLinTo(0.01, 1),   from: pctLinFrom(0.01, 1) },
+    DISSIPATION:     { cfg: 'DENSITY_DISSIPATION',  to: pctSquareTo(4),      from: pctSquareFrom(4) },
+    DRAG:            { cfg: 'VELOCITY_DISSIPATION', to: pctSquareTo(4),      from: pctSquareFrom(4) },
+    VORTICITY:       { cfg: 'CURL',                 to: pctLinTo(0, 50),     from: pctLinFrom(0, 50) },
+    PRESSURE_STR:    { cfg: 'PRESSURE',             to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
+    TOUCH_FORCE:     { cfg: 'INTENSITY',            to: pctSpeedTo,          from: pctSpeedFrom },
+    BLOOM_INT:       { cfg: 'BLOOM_INTENSITY',      to: pctLinTo(0, 2),      from: pctLinFrom(0, 2) },
+    BLOOM_THR:       { cfg: 'BLOOM_THRESHOLD',      to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
+    SUNRAYS_W:       { cfg: 'SUNRAYS_WEIGHT',       to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
+    RAINBOW_SPD:     { cfg: 'RAINBOW_SPEED',        to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
+};
+
+const ui = {};
+
+function syncUI () {
+    Object.keys(PCT).forEach(k => {
+        const m = PCT[k];
+        ui[k] = Math.round(Math.min(100, Math.max(0, m.from(config[m.cfg]))));
+    });
+}
+syncUI();
+
+function addPct (folder, key, label) {
+    const m = PCT[key];
+    return folder.add(ui, key, 0, 100).step(1).name(label).onChange(v => {
+        config[m.cfg] = m.to(v);
+    });
+}
+
+const QUALITY_LEVELS = { 'Very Low': 128, 'Low': 256, 'Medium': 512, 'High': 1024, 'Super High': 1536, 'Ultra High': 2048 };
+const PRESSURE_LEVELS = { 'Low': 10, 'Norm': 20, 'Max': 50 };
+const EDGE_MODES = ['Wall', 'Wrap', 'Void', 'Repel'];
+const CORNER_MODES = ['Normal', 'Rounded', 'Repel', 'Bounce', 'Absorb', 'Wrap'];
+const FLOW_DIRECTIONS = {
+    'None':           null,
+    'Up':             [0, 1],
+    'Down':           [0, -1],
+    'Left':           [-1, 0],
+    'Right':          [1, 0],
+    'Up-Left':        [-Math.SQRT1_2, Math.SQRT1_2],
+    'Up-Right':       [Math.SQRT1_2, Math.SQRT1_2],
+    'Down-Left':      [-Math.SQRT1_2, -Math.SQRT1_2],
+    'Down-Right':     [Math.SQRT1_2, -Math.SQRT1_2],
+    'Radial Outward': 'out',
+    'Radial Inward':  'in',
+    'Circular':       'circle',
+};
+const SEGMENT_CHOICES = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+const TRANSITION_CHOICES = { '3 s': 3, '5 s': 5, '8 s': 8, '10 s': 10, '15 s': 15, '20 s': 20, '30 s': 30 };
+
+const isWebGL2Context = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+let displacement = null;
+let forceTime = 0;
+let wrapWarned = false;
+
+// Wrap needs repeating textures, which WebGL1 cannot do at these sizes
+function effectiveEdgeMode () {
+    const i = EDGE_MODES.indexOf(config.EDGE);
+    if (i === 1 && !isWebGL2Context) return 0;
+    return Math.max(0, i);
+}
+
+function applyEdgeWrap () {
+    const mode = effectiveEdgeMode() === 1 ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+    const fbos = [velocity && velocity.read, velocity && velocity.write, dye && dye.read, dye && dye.write,
+                  pressure && pressure.read, pressure && pressure.write, divergence, curl,
+                  displacement && displacement.read, displacement && displacement.write];
+    fbos.forEach(f => {
+        if (!f) return;
+        gl.bindTexture(gl.TEXTURE_2D, f.texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, mode);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, mode);
+    });
+}
+
+function onEdgeChange () {
+    if (config.EDGE === 'Wrap' && !isWebGL2Context && !wrapWarned) {
+        wrapWarned = true;
+        showToast('Wrap needs WebGL2 · using Wall');
+    }
+    applyEdgeWrap();
+}
+
+function flowUniforms () {
+    const d = FLOW_DIRECTIONS[config.FLOW_DIRECTION];
+    if (d == null) return { mode: -1, x: 0, y: 0 };
+    if (d === 'out') return { mode: 1, x: 0, y: 0 };
+    if (d === 'in') return { mode: 2, x: 0, y: 0 };
+    if (d === 'circle') return { mode: 3, x: 0, y: 0 };
+    return { mode: 0, x: d[0], y: d[1] };
+}
+
+function forcesActive () {
+    return FLOW_DIRECTIONS[config.FLOW_DIRECTION] != null && config.FLOW_SPEED > 0
+        || config.SWIRL > 0 || config.TURBULENCE > 0 || config.GRAVITY > 0
+        || config.BUOYANCY !== 50 || config.ELASTICITY > 0
+        || effectiveEdgeMode() !== 1 && (effectiveEdgeMode() === 3 || config.EDGE_FRICTION > 0 || config.EDGE_BOUNCE > 0 || config.CORNER !== 'Normal');
+}
+
+// Random kicks: velocity-only nudges whose rate and strength follow Randomness
+function applyRandomness (dt) {
+    const r = config.RANDOMNESS / 100;
+    if (r <= 0 || config.PAUSED) return;
+    let kicks = r * r * 20 * dt * config.SPEED;
+    while (kicks > 0) {
+        if (kicks < 1 && Math.random() > kicks) break;
+        kicks -= 1;
+        const a = Math.random() * Math.PI * 2;
+        const v = (150 + 650 * r) * Math.random();
+        splatVelocity(Math.random(), Math.random(), Math.cos(a) * v, Math.sin(a) * v, 0.6 + Math.random());
+    }
 }
 
 startGUI();
@@ -587,7 +738,7 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
 }
 
 function startGUI () {
-    var gui = new dat.GUI({ width: 300 });
+    var gui = new dat.GUI({ width: 310 });
     guiRoot = gui;
 
     gui.add({ fun: randomizeConfig }, 'fun').name('✨ Randomize');
@@ -596,8 +747,44 @@ function startGUI () {
         splatStack.push(parseInt(Math.random() * 20) + 5);
     } }, 'fun').name('Random splats');
 
+    let simFolder = gui.addFolder('Simulation');
+    simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
+    addPct(simFolder, 'TIME', 'time');
+    simFolder.add(config, 'AUTOPLAY').name('autoplay').listen();
+    addPct(simFolder, 'RADIUS', 'radius');
+    simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
+    addPct(simFolder, 'DISSIPATION', 'dissipation');
+    simFolder.add(config, 'VISCOSITY', 0, 100).step(1).name('viscosity');
+    addPct(simFolder, 'VORTICITY', 'vorticity');
+    simFolder.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
+    simFolder.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure');
+    simFolder.add(config, 'PAUSED').name('paused').listen();
+
+    let forcesFolder = gui.addFolder('Forces');
+    forcesFolder.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
+    forcesFolder.add(config, 'FLOW_STRENGTH', 0, 100).step(1).name('flow strength');
+    forcesFolder.add(config, 'SWIRL', 0, 100).step(1).name('swirl');
+    addPct(forcesFolder, 'PRESSURE_STR', 'pressure strength');
+    forcesFolder.add(config, 'BUOYANCY', 0, 100).step(1).name('buoyancy (50 = none)');
+    addPct(forcesFolder, 'DRAG', 'drag');
+    forcesFolder.add(config, 'ELASTICITY', 0, 100).step(1).name('elasticity');
+    forcesFolder.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
+    forcesFolder.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
+    forcesFolder.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
+
+    let edgeFolder = gui.addFolder('Edges');
+    edgeFolder.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
+    edgeFolder.add(config, 'REPEL_STRENGTH', 0, 100).step(1).name('repel strength');
+    edgeFolder.add(config, 'REPEL_DISTANCE', 0, 100).step(1).name('repel distance');
+    edgeFolder.add(config, 'EDGE_FRICTION', 0, 100).step(1).name('edge friction');
+    edgeFolder.add(config, 'EDGE_BOUNCE', 0, 100).step(1).name('edge bounce');
+    edgeFolder.add(config, 'EDGE_SOFTNESS', 0, 100).step(1).name('edge softness');
+    edgeFolder.add(config, 'CORNER', CORNER_MODES).name('corner behavior');
+
+    let touchFolder = gui.addFolder('Touch');
+    addPct(touchFolder, 'TOUCH_FORCE', 'touch force');
+
     let modesFolder = gui.addFolder('Modes');
-    modesFolder.add(config, 'AUTOPLAY').name('auto-play').listen();
     modesFolder.add(config, 'VORTEX').name('vortex').listen();
     modesFolder.add(config, 'MIRROR').name('mirror').listen().onChange(v => {
         if (v) config.KALEIDOSCOPE = false;
@@ -605,46 +792,29 @@ function startGUI () {
     modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').listen().onChange(v => {
         if (v) config.MIRROR = false;
     });
-    modesFolder.add(config, 'KALEIDO_SEGMENTS', 2, 10).step(1).name('segments').listen();
+    modesFolder.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments').listen()
+        .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
     modesFolder.add(config, 'RAINBOW').name('rainbow').listen();
-    modesFolder.add(config, 'RAINBOW_SPEED', 0.02, 1.0).name('rainbow speed');
+    addPct(modesFolder, 'RAINBOW_SPD', 'rainbow speed');
     modesFolder.add(config, 'BLACKLIGHT').name('blacklight').listen().onChange(updateKeywords);
     modesFolder.add(config, 'TRAILS').name('color trails').listen();
     modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch').listen();
-    modesFolder.open();
 
     let colorsFolder = gui.addFolder('Colors');
     colorsFolder.add(config, 'PALETTE', PALETTE_NAMES).name('palette').listen().onChange(v => setPalette(v, 1.2));
     colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions').listen();
-    colorsFolder.add(config, 'TRANSITION_TIME', 3, 30).step(1).name('seconds per palette');
+    colorsFolder.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
+        .onChange(v => { config.TRANSITION_TIME = Number(v); });
     colorsFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background').listen();
-    colorsFolder.open();
+    colorsFolder.add(config, 'COLORFUL').name('colorful');
 
-    let motionFolder = gui.addFolder('Motion');
-    motionFolder.add(config, 'SPEED', 0.1, 3.0).name('speed').listen();
-    motionFolder.add(config, 'INTENSITY', 0.1, 3.0).name('intensity').listen();
-    motionFolder.open();
-
-    let simFolder = gui.addFolder('Simulation');
-    simFolder.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
-    simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    simFolder.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion').listen();
-    simFolder.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion').listen();
-    simFolder.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
-    simFolder.add(config, 'CURL', 0, 50).name('vorticity').step(1).listen();
-    simFolder.add(config, 'SPLAT_RADIUS', 0.01, 1.0).name('splat radius').listen();
-    simFolder.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
-    simFolder.add(config, 'COLORFUL').name('colorful');
-    simFolder.add(config, 'PAUSED').name('paused').listen();
-
-    let bloomFolder = gui.addFolder('Bloom');
-    bloomFolder.add(config, 'BLOOM').name('enabled').onFinishChange(updateKeywords);
-    bloomFolder.add(config, 'BLOOM_INTENSITY', 0.1, 2.0).name('intensity').listen();
-    bloomFolder.add(config, 'BLOOM_THRESHOLD', 0.0, 1.0).name('threshold').listen();
-
-    let sunraysFolder = gui.addFolder('Sunrays');
-    sunraysFolder.add(config, 'SUNRAYS').name('enabled').onFinishChange(updateKeywords);
-    sunraysFolder.add(config, 'SUNRAYS_WEIGHT', 0.3, 1.0).name('weight').listen();
+    let effectsFolder = gui.addFolder('Effects');
+    effectsFolder.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
+    effectsFolder.add(config, 'BLOOM').name('bloom').onFinishChange(updateKeywords);
+    addPct(effectsFolder, 'BLOOM_INT', 'bloom intensity');
+    addPct(effectsFolder, 'BLOOM_THR', 'bloom threshold');
+    effectsFolder.add(config, 'SUNRAYS').name('sunrays').onFinishChange(updateKeywords);
+    addPct(effectsFolder, 'SUNRAYS_W', 'sunrays weight');
 
     let captureFolder = gui.addFolder('Capture');
     captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
@@ -1196,6 +1366,7 @@ const divergenceShader = compileShader(gl.FRAGMENT_SHADER, `
     varying highp vec2 vT;
     varying highp vec2 vB;
     uniform sampler2D uVelocity;
+    uniform float edgeMode;
 
     void main () {
         float L = texture2D(uVelocity, vL).x;
@@ -1204,13 +1375,259 @@ const divergenceShader = compileShader(gl.FRAGMENT_SHADER, `
         float B = texture2D(uVelocity, vB).y;
 
         vec2 C = texture2D(uVelocity, vUv).xy;
-        if (vL.x < 0.0) { L = -C.x; }
-        if (vR.x > 1.0) { R = -C.x; }
-        if (vT.y > 1.0) { T = -C.y; }
-        if (vB.y < 0.0) { B = -C.y; }
+        if (edgeMode > 1.5 && edgeMode < 2.5) {
+            // Void: open boundary, fluid flows straight out
+            if (vL.x < 0.0) { L = C.x; }
+            if (vR.x > 1.0) { R = C.x; }
+            if (vT.y > 1.0) { T = C.y; }
+            if (vB.y < 0.0) { B = C.y; }
+        } else if (edgeMode < 0.5 || edgeMode > 2.5) {
+            // Wall and Repel: solid boundary
+            if (vL.x < 0.0) { L = -C.x; }
+            if (vR.x > 1.0) { R = -C.x; }
+            if (vT.y > 1.0) { T = -C.y; }
+            if (vB.y < 0.0) { B = -C.y; }
+        }
 
         float div = 0.5 * (R - L + T - B);
         gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
+    }
+`);
+
+const forcesShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uDye;
+    uniform sampler2D uDisp;
+    uniform float dt;
+    uniform float time;
+    uniform float aspectRatio;
+    uniform float flowMode;
+    uniform vec2 flowDir;
+    uniform float flowSpeed;
+    uniform float swirl;
+    uniform float turbulence;
+    uniform float buoyancy;
+    uniform float elasticity;
+    uniform float edgeMode;
+    uniform float cornerMode;
+    uniform float repelStrength;
+    uniform float repelDistance;
+    uniform float edgeFriction;
+    uniform float edgeBounce;
+    uniform float edgeSoftness;
+
+    float hash (vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float noise (vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                   mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+
+    float field (vec2 p) {
+        return noise(p * 3.0 + vec2(time * 0.31, -time * 0.23))
+             + 0.5 * noise(p * 6.1 + vec2(-time * 0.47, time * 0.37) + 17.0);
+    }
+
+    // Pushes velocity toward a target along a direction without overshooting
+    vec2 relax (vec2 v, vec2 dir, float target, float rate) {
+        float along = dot(v, dir);
+        return dir * max(target - along, 0.0) * min(rate * dt, 1.0);
+    }
+
+    float band (float d) {
+        float x = clamp(1.0 - d / repelDistance, 0.0, 1.0);
+        return pow(x, mix(3.0, 0.6, edgeSoftness));
+    }
+
+    void main () {
+        vec2 v = texture2D(uVelocity, vUv).xy;
+        vec3 dye = texture2D(uDye, vUv).rgb;
+        float w = clamp(dot(dye, vec3(0.3333)) * 4.0, 0.0, 1.0);
+
+        vec2 p = (vUv - 0.5) * vec2(aspectRatio, 1.0);
+        float r = length(p);
+        vec2 radial = r > 1e-4 ? p / r : vec2(0.0);
+        vec2 tangent = vec2(-radial.y, radial.x);
+
+        // Flow direction
+        if (flowMode > -0.5) {
+            vec2 d = flowDir;
+            if (flowMode > 0.5 && flowMode < 1.5) d = radial * smoothstep(0.0, 0.06, r);
+            else if (flowMode > 1.5 && flowMode < 2.5) d = -radial * smoothstep(0.0, 0.06, r);
+            else if (flowMode > 2.5) d = tangent * smoothstep(0.0, 0.06, r);
+            v += relax(v, d, flowSpeed, 2.0 * (0.35 + 0.65 * w));
+        }
+
+        // Swirl around the center, strongest in the middle third
+        if (swirl > 0.0) {
+            float profile = smoothstep(0.0, 0.12, r) * exp(-r * r * 4.0);
+            v += relax(v, tangent, swirl * profile, 3.0);
+        }
+
+        // Turbulence: divergence-free curl noise
+        if (turbulence > 0.0) {
+            float e = 0.01;
+            float n1 = field(p + vec2(0.0, e));
+            float n2 = field(p - vec2(0.0, e));
+            float n3 = field(p + vec2(e, 0.0));
+            float n4 = field(p - vec2(e, 0.0));
+            vec2 c = vec2(n1 - n2, -(n3 - n4)) / (2.0 * e);
+            v += c * turbulence * dt;
+        }
+
+        // Gravity and buoyancy act on the colored fluid
+        v.y += buoyancy * w * dt;
+
+        // Elasticity: spring back toward where the fluid started
+        if (elasticity > 0.0)
+            v -= texture2D(uDisp, vUv).xy * elasticity * dt;
+
+        // Edges (not used when wrapping)
+        if (edgeMode < 0.5 || edgeMode > 1.5) {
+            vec2 halfSize = vec2(aspectRatio * 0.5, 0.5);
+            vec2 q = halfSize - abs(p);
+            float d;
+            vec2 nOut;
+            if (q.x < q.y) { d = q.x; nOut = vec2(sign(p.x), 0.0); }
+            else           { d = q.y; nOut = vec2(0.0, sign(p.y)); }
+
+            // Corner zone
+            vec2 toCorner = halfSize * sign(p) - p;
+            float cd = length(toCorner);
+            float cornerZone = max(repelDistance * 1.5, 0.12);
+            float c = 1.0 - smoothstep(0.0, cornerZone, cd);
+            vec2 nCorner = cd > 1e-4 ? toCorner / cd : nOut;
+
+            // Rounded corners: outside the rounded rectangle counts as solid
+            if (cornerMode > 0.5 && cornerMode < 1.5) {
+                float rr = 0.14;
+                vec2 k = abs(p) - (halfSize - rr);
+                float sd = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - rr;
+                if (k.x > 0.0 && k.y > 0.0) {
+                    vec2 n = normalize(k) * sign(p);
+                    float inside = -sd;
+                    d = min(d, max(inside, 0.0));
+                    nOut = n;
+                    if (sd > 0.0) {
+                        v -= n * max(dot(v, n), 0.0);
+                        v -= n * 400.0 * min(sd / rr, 1.0) * dt;
+                    }
+                }
+            }
+
+            float f = band(d);
+            float vn = dot(v, nOut);
+            vec2 tn = vec2(-nOut.y, nOut.x);
+
+            if (edgeMode > 2.5)
+                v -= nOut * repelStrength * f * dt;
+            if (edgeBounce > 0.0 && vn > 0.0)
+                v -= nOut * vn * (1.0 + edgeBounce) * f;
+            if (edgeFriction > 0.0)
+                v -= tn * dot(v, tn) * edgeFriction * f * min(10.0 * dt, 1.0);
+
+            if (cornerMode > 1.5 && cornerMode < 2.5)
+                v -= nCorner * max(repelStrength, 300.0) * 1.5 * c * dt;
+            if (cornerMode > 2.5 && cornerMode < 3.5) {
+                float vc = dot(v, nCorner);
+                if (vc > 0.0) v -= nCorner * vc * (1.0 + max(edgeBounce, 0.6)) * c;
+            }
+            if (cornerMode > 3.5 && cornerMode < 4.5)
+                v *= 1.0 - c * min(4.0 * dt, 1.0);
+            if (cornerMode > 4.5)
+                v = mix(v, texture2D(uVelocity, vec2(1.0) - vUv).xy, c * min(8.0 * dt, 0.5));
+        }
+
+        // Keep runaway forces from blowing up the solver
+        float speed = length(v);
+        if (speed > 2500.0) v *= 2500.0 / speed;
+
+        gl_FragColor = vec4(v, 0.0, 1.0);
+    }
+`);
+
+const displacementShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uDisp;
+    uniform sampler2D uVelocity;
+    uniform float dt;
+
+    void main () {
+        vec2 d = texture2D(uDisp, vUv).xy + texture2D(uVelocity, vUv).xy * dt;
+        d *= 1.0 / (1.0 + 1.5 * dt);
+        gl_FragColor = vec4(d, 0.0, 1.0);
+    }
+`);
+
+const viscosityShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    varying vec2 vL;
+    varying vec2 vR;
+    varying vec2 vT;
+    varying vec2 vB;
+    uniform sampler2D uVelocity;
+    uniform float alpha;
+
+    void main () {
+        vec2 c = texture2D(uVelocity, vUv).xy;
+        vec2 sum = texture2D(uVelocity, vL).xy + texture2D(uVelocity, vR).xy
+                 + texture2D(uVelocity, vT).xy + texture2D(uVelocity, vB).xy;
+        gl_FragColor = vec4(c + alpha * (sum - 4.0 * c), 0.0, 1.0);
+    }
+`);
+
+const edgeDyeShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uTarget;
+    uniform float dt;
+    uniform float aspectRatio;
+    uniform float edgeMode;
+    uniform float cornerMode;
+    uniform float repelDistance;
+    uniform float edgeSoftness;
+
+    void main () {
+        vec4 col = texture2D(uTarget, vUv);
+        vec2 p = (vUv - 0.5) * vec2(aspectRatio, 1.0);
+        vec2 halfSize = vec2(aspectRatio * 0.5, 0.5);
+        vec2 q = halfSize - abs(p);
+        float d = min(q.x, q.y);
+
+        // Void: fluid fades away as it leaves through the edges
+        if (edgeMode > 1.5 && edgeMode < 2.5) {
+            float x = clamp(1.0 - d / max(repelDistance * 0.5, 0.02), 0.0, 1.0);
+            float f = pow(x, mix(3.0, 0.6, edgeSoftness));
+            col *= 1.0 - f * min(8.0 * dt, 1.0);
+        }
+
+        float cd = length(halfSize * sign(p) - p);
+        float c = 1.0 - smoothstep(0.0, max(repelDistance * 1.5, 0.12), cd);
+        if (cornerMode > 3.5 && cornerMode < 4.5)
+            col *= 1.0 - c * min(4.0 * dt, 1.0);
+        if (cornerMode > 4.5)
+            col = mix(col, texture2D(uTarget, vec2(1.0) - vUv), c * min(8.0 * dt, 0.5));
+
+        gl_FragColor = col;
     }
 `);
 
@@ -1374,6 +1791,10 @@ const sunraysMaskProgram     = new Program(baseVertexShader, sunraysMaskShader);
 const sunraysProgram         = new Program(baseVertexShader, sunraysShader);
 const splatProgram           = new Program(baseVertexShader, splatShader);
 const backgroundProgram      = new Program(baseVertexShader, backgroundShader);
+const forcesProgram          = new Program(baseVertexShader, forcesShader);
+const displacementProgram    = new Program(baseVertexShader, displacementShader);
+const viscosityProgram       = new Program(baseVertexShader, viscosityShader);
+const edgeDyeProgram         = new Program(baseVertexShader, edgeDyeShader);
 const advectionProgram       = new Program(baseVertexShader, advectionShader);
 const divergenceProgram      = new Program(baseVertexShader, divergenceShader);
 const curlProgram            = new Program(baseVertexShader, curlShader);
@@ -1408,6 +1829,12 @@ function initFramebuffers () {
     divergence = createFBO      (simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
     curl       = createFBO      (simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
     pressure   = createDoubleFBO(simRes.width, simRes.height, r.internalFormat, r.format, texType, gl.NEAREST);
+
+    if (displacement == null)
+        displacement = createDoubleFBO(simRes.width, simRes.height, rg.internalFormat, rg.format, texType, filtering);
+    else
+        displacement = resizeDoubleFBO(displacement, simRes.width, simRes.height, rg.internalFormat, rg.format, texType, filtering);
+    applyEdgeWrap();
 
     initBloomFramebuffers();
     initSunraysFramebuffers();
@@ -1588,6 +2015,7 @@ function update () {
     applyInputs();
     updateAutoplay(dt);
     updateVortex(dt);
+    applyRandomness(dt);
     if (!config.PAUSED) {
         const simDt = dt * config.SPEED;
         const substeps = Math.max(1, Math.ceil(simDt / 0.016667 - 1e-6));
@@ -1668,9 +2096,12 @@ function step (dt) {
     blit(velocity.write);
     velocity.swap();
 
+    applyForces(dt);
+
     divergenceProgram.bind();
     gl.uniform2f(divergenceProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform1i(divergenceProgram.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1f(divergenceProgram.uniforms.edgeMode, effectiveEdgeMode());
     blit(divergence);
 
     clearProgram.bind();
@@ -1682,7 +2113,8 @@ function step (dt) {
     pressureProgram.bind();
     gl.uniform2f(pressureProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
-    for (let i = 0; i < config.PRESSURE_ITERATIONS; i++) {
+    const pressureIterations = PRESSURE_LEVELS[config.PRESSURE_LEVEL] || config.PRESSURE_ITERATIONS;
+    for (let i = 0; i < pressureIterations; i++) {
         gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
         blit(pressure.write);
         pressure.swap();
@@ -1702,8 +2134,9 @@ function step (dt) {
     let velocityId = velocity.read.attach(0);
     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocityId);
     gl.uniform1i(advectionProgram.uniforms.uSource, velocityId);
-    gl.uniform1f(advectionProgram.uniforms.dt, dt);
-    gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION);
+    const flowScale = pctSpeedTo(config.FLOW_STRENGTH);
+    gl.uniform1f(advectionProgram.uniforms.dt, dt * flowScale);
+    gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION / Math.max(flowScale, 0.05));
     blit(velocity.write);
     velocity.swap();
 
@@ -1711,7 +2144,81 @@ function step (dt) {
         gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, dye.texelSizeX, dye.texelSizeY);
     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
     gl.uniform1i(advectionProgram.uniforms.uSource, dye.read.attach(1));
-    gl.uniform1f(advectionProgram.uniforms.dissipation, config.TRAILS ? config.DENSITY_DISSIPATION * 0.12 : config.DENSITY_DISSIPATION);
+    gl.uniform1f(advectionProgram.uniforms.dissipation, (config.TRAILS ? config.DENSITY_DISSIPATION * 0.12 : config.DENSITY_DISSIPATION) / Math.max(flowScale, 0.05));
+    blit(dye.write);
+    dye.swap();
+
+    applyDyeEdges(dt);
+}
+
+function applyForces (dt) {
+    forceTime += dt;
+
+    if (config.ELASTICITY > 0) {
+        displacementProgram.bind();
+        gl.uniform1i(displacementProgram.uniforms.uDisp, displacement.read.attach(0));
+        gl.uniform1i(displacementProgram.uniforms.uVelocity, velocity.read.attach(1));
+        gl.uniform1f(displacementProgram.uniforms.dt, dt);
+        blit(displacement.write);
+        displacement.swap();
+    }
+
+    if (forcesActive()) {
+        const flow = flowUniforms();
+        const edgeMode = effectiveEdgeMode();
+        const u = forcesProgram.uniforms;
+        forcesProgram.bind();
+        gl.uniform1i(u.uVelocity, velocity.read.attach(0));
+        gl.uniform1i(u.uDye, dye.read.attach(1));
+        gl.uniform1i(u.uDisp, displacement.read.attach(2));
+        gl.uniform1f(u.dt, dt);
+        gl.uniform1f(u.time, forceTime);
+        gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+        gl.uniform1f(u.flowMode, config.FLOW_SPEED > 0 ? flow.mode : -1);
+        gl.uniform2f(u.flowDir, flow.x, flow.y);
+        gl.uniform1f(u.flowSpeed, config.FLOW_SPEED / 100 * 450);
+        gl.uniform1f(u.swirl, config.SWIRL / 100 * 900);
+        gl.uniform1f(u.turbulence, config.TURBULENCE / 100 * 160);
+        gl.uniform1f(u.buoyancy, (config.BUOYANCY - 50) / 50 * 700 - config.GRAVITY / 100 * 700);
+        gl.uniform1f(u.elasticity, config.ELASTICITY / 100 * 80);
+        gl.uniform1f(u.edgeMode, edgeMode);
+        gl.uniform1f(u.cornerMode, CORNER_MODES.indexOf(config.CORNER));
+        gl.uniform1f(u.repelStrength, config.REPEL_STRENGTH / 100 * 1500);
+        gl.uniform1f(u.repelDistance, 0.01 + config.REPEL_DISTANCE / 100 * 0.34);
+        gl.uniform1f(u.edgeFriction, config.EDGE_FRICTION / 100);
+        gl.uniform1f(u.edgeBounce, config.EDGE_BOUNCE / 100);
+        gl.uniform1f(u.edgeSoftness, config.EDGE_SOFTNESS / 100);
+        blit(velocity.write);
+        velocity.swap();
+    }
+
+    if (config.VISCOSITY > 0) {
+        const total = config.VISCOSITY / 100;
+        const iterations = Math.ceil(total / 0.24);
+        viscosityProgram.bind();
+        gl.uniform2f(viscosityProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
+        gl.uniform1f(viscosityProgram.uniforms.alpha, total / iterations);
+        for (let i = 0; i < iterations; i++) {
+            gl.uniform1i(viscosityProgram.uniforms.uVelocity, velocity.read.attach(0));
+            blit(velocity.write);
+            velocity.swap();
+        }
+    }
+}
+
+function applyDyeEdges (dt) {
+    const edgeMode = effectiveEdgeMode();
+    const corner = CORNER_MODES.indexOf(config.CORNER);
+    if (edgeMode !== 2 && !(edgeMode !== 1 && corner >= 4)) return;
+    const u = edgeDyeProgram.uniforms;
+    edgeDyeProgram.bind();
+    gl.uniform1i(u.uTarget, dye.read.attach(0));
+    gl.uniform1f(u.dt, dt);
+    gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+    gl.uniform1f(u.edgeMode, edgeMode);
+    gl.uniform1f(u.cornerMode, edgeMode === 1 ? 0 : corner);
+    gl.uniform1f(u.repelDistance, 0.01 + config.REPEL_DISTANCE / 100 * 0.34);
+    gl.uniform1f(u.edgeSoftness, config.EDGE_SOFTNESS / 100);
     blit(dye.write);
     dye.swap();
 }
@@ -1886,6 +2393,17 @@ function splat (x, y, dx, dy, color) {
     gl.uniform3f(splatProgram.uniforms.color, color.r, color.g, color.b);
     blit(dye.write);
     dye.swap();
+}
+
+function splatVelocity (x, y, dx, dy, radiusScale) {
+    splatProgram.bind();
+    gl.uniform1i(splatProgram.uniforms.uTarget, velocity.read.attach(0));
+    gl.uniform1f(splatProgram.uniforms.aspectRatio, canvas.width / canvas.height);
+    gl.uniform2f(splatProgram.uniforms.point, x, y);
+    gl.uniform3f(splatProgram.uniforms.color, dx, dy, 0.0);
+    gl.uniform1f(splatProgram.uniforms.radius, correctRadius(config.SPLAT_RADIUS * (radiusScale || 1) / 100.0));
+    blit(velocity.write);
+    velocity.swap();
 }
 
 function correctRadius (radius) {
@@ -2067,6 +2585,11 @@ function getResolution (resolution) {
 
     let min = Math.round(resolution);
     let max = Math.round(resolution * aspectRatio);
+    const limit = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
+    if (max > limit) {
+        min = Math.round(min * limit / max);
+        max = limit;
+    }
 
     if (gl.drawingBufferWidth > gl.drawingBufferHeight)
         return { width: max, height: min };
