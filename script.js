@@ -55,7 +55,417 @@ let config = {
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 1.0,
+    SPEED: 1.0,
+    INTENSITY: 1.0,
+    PALETTE: 'Classic',
+    AUTO_TRANSITION: false,
+    TRANSITION_TIME: 10,
+    BACKGROUND: 'Black',
+    RAINBOW: false,
+    RAINBOW_SPEED: 0.12,
+    BLACKLIGHT: false,
+    TRAILS: false,
+    RANDOM_INJECTION: false,
+    AUTOPLAY: false,
+    VORTEX: false,
+    MIRROR: false,
+    KALEIDOSCOPE: false,
+    KALEIDO_SEGMENTS: 6,
 }
+
+
+// Fluid Fix features: palettes, backgrounds, modes and emitters
+
+const PALETTES = {
+    'Classic': null, // full spectrum
+    'Sunset':  ['#ff5e62', '#ff9966', '#ffcc33', '#e8366f', '#8e2de2'],
+    'Ocean':   ['#00c6ff', '#0072ff', '#00e5c0', '#1de9b6', '#3d5afe'],
+    'Aurora':  ['#00ff87', '#60efff', '#0061ff', '#a855f7', '#22d3ee'],
+    'Fire':    ['#ff2a00', '#ff7b00', '#ffb700', '#ff0040', '#ffd000'],
+    'Neon':    ['#ff00e6', '#00fff0', '#fffb00', '#7c00ff', '#00ff6a'],
+    'Candy':   ['#ff6ec7', '#ffb3de', '#a0e7ff', '#c3a6ff', '#ff9a8b'],
+    'Forest':  ['#2ecc71', '#a8e063', '#00b894', '#f9d423', '#56ab2f'],
+    'Galaxy':  ['#6a00f4', '#b100e8', '#3d5afe', '#ff4ecd', '#00b4ff'],
+    'Ice':     ['#c9f2ff', '#7fdbff', '#39cccc', '#8ab6ff', '#5e60ce'],
+    'Gold':    ['#ffd700', '#ffb300', '#ff8f00', '#fff1a8', '#c77d00'],
+};
+const PALETTE_NAMES = Object.keys(PALETTES);
+
+// top, bottom, glow (glow is added as a soft radial light in the middle)
+const BACKGROUNDS = {
+    'Black':      ['#000000', '#000000', '#000000'],
+    'Midnight':   ['#0b1026', '#000000', '#0a1a40'],
+    'Nebula':     ['#1a0533', '#05010d', '#3b0a5e'],
+    'Deep Ocean': ['#002233', '#000814', '#003b5c'],
+    'Ember':      ['#1f0500', '#000000', '#3d0c00'],
+    'Forest':     ['#04170f', '#000604', '#0b2e1c'],
+    'Charcoal':   ['#2b2b2e', '#121214', '#000000'],
+    'Paper':      ['#f5f2ea', '#e4ded0', '#000000'],
+    'Custom':     null, // uses BACK_COLOR
+};
+const BACKGROUND_NAMES = Object.keys(BACKGROUNDS);
+
+function hexToRGB (hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 };
+}
+
+const PALETTE_RGB = {};
+PALETTE_NAMES.forEach(name => {
+    PALETTE_RGB[name] = PALETTES[name] ? PALETTES[name].map(hexToRGB) : null;
+});
+
+function lerpColor (a, b, t) {
+    return { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t };
+}
+
+function frac (u) {
+    return u - Math.floor(u);
+}
+
+function smooth01 (t) {
+    t = Math.min(Math.max(t, 0), 1);
+    return t * t * (3 - 2 * t);
+}
+
+// Color along a palette, treated as a looping gradient (u in [0, 1))
+function paletteColor (name, u) {
+    u = frac(u);
+    const colors = PALETTE_RGB[name];
+    if (!colors) return HSVtoRGB(u, 1.0, 1.0);
+    const f = u * colors.length;
+    const i = Math.floor(f) % colors.length;
+    const j = (i + 1) % colors.length;
+    return lerpColor(colors[i], colors[j], smooth01(f - Math.floor(f)));
+}
+
+// Palette crossfade state
+let paletteFrom = config.PALETTE;
+let paletteTo = config.PALETTE;
+let paletteMix = 1;
+let paletteFadeTime = 1.2;
+let paletteHold = 0;
+
+function setPalette (name, fadeSeconds) {
+    if (!PALETTES.hasOwnProperty(name)) return;
+    paletteFrom = paletteMix < 0.5 ? paletteFrom : paletteTo;
+    paletteTo = name;
+    paletteMix = 0;
+    paletteFadeTime = Math.max(0.05, fadeSeconds);
+    paletteHold = 0;
+    config.PALETTE = name;
+}
+
+function nextPaletteName () {
+    const i = PALETTE_NAMES.indexOf(paletteTo);
+    return PALETTE_NAMES[(i + 1) % PALETTE_NAMES.length];
+}
+
+function updatePalette (dt) {
+    if (paletteMix < 1)
+        paletteMix = Math.min(1, paletteMix + dt / paletteFadeTime);
+
+    if (config.AUTO_TRANSITION && !config.PAUSED) {
+        paletteHold += dt;
+        if (paletteHold >= config.TRANSITION_TIME) {
+            const next = nextPaletteName();
+            setPalette(next, Math.min(4, config.TRANSITION_TIME * 0.5));
+            showToast('Palette · ' + next);
+        }
+    }
+}
+
+function samplePalette (u) {
+    const to = paletteColor(paletteTo, u);
+    if (paletteMix >= 1) return to;
+    return lerpColor(paletteColor(paletteFrom, u), to, smooth01(paletteMix));
+}
+
+// Blacklight: push every color to full saturation and extra brightness
+function neonize (c) {
+    const mx = Math.max(c.r, c.g, c.b);
+    const mn = Math.min(c.r, c.g, c.b);
+    if (mx - mn < 1e-4) return { r: c.r * 1.6, g: c.g * 1.6, b: c.b * 1.6 };
+    const k = 1.0 / (mx - mn);
+    return { r: (c.r - mn) * k * 1.6, g: (c.g - mn) * k * 1.6, b: (c.b - mn) * k * 1.6 };
+}
+
+function finishColor (c) {
+    if (config.BLACKLIGHT) c = neonize(c);
+    return { r: c.r * 0.15, g: c.g * 0.15, b: c.b * 0.15 };
+}
+
+let rainbowHue = Math.random();
+
+// Color for emitters: u picks a spot on the palette (or rainbow wheel)
+function colorAt (u) {
+    if (config.RAINBOW) return finishColor(HSVtoRGB(frac(rainbowHue + u), 1.0, 1.0));
+    return finishColor(samplePalette(u));
+}
+
+// Symmetry: Mirror reflects left/right, Kaleidoscope makes N rotated + reflected copies
+function symmetryCopies (x, y, dx, dy) {
+    if (config.KALEIDOSCOPE) {
+        const n = Math.max(2, Math.round(config.KALEIDO_SEGMENTS));
+        const ar = canvas.width / canvas.height;
+        const px = (x - 0.5) * ar;
+        const py = y - 0.5;
+        const out = [];
+        for (let k = 0; k < n; k++) {
+            const a = (Math.PI * 2 * k) / n;
+            const c = Math.cos(a), s = Math.sin(a);
+            out.push([(px * c - py * s) / ar + 0.5, px * s + py * c + 0.5, dx * c - dy * s, dx * s + dy * c]);
+            // reflected copy
+            out.push([(-px * c - py * s) / ar + 0.5, -px * s + py * c + 0.5, -dx * c - dy * s, -dx * s + dy * c]);
+        }
+        return dedupeCopies(out);
+    }
+    if (config.MIRROR)
+        return dedupeCopies([[x, y, dx, dy], [1 - x, y, -dx, dy]]);
+    return [[x, y, dx, dy]];
+}
+
+// Drop copies that land on the same spot moving the same way (they would only double the brightness)
+function dedupeCopies (copies) {
+    const out = [];
+    for (const c of copies) {
+        const dup = out.some(o =>
+            Math.abs(o[0] - c[0]) < 1e-3 && Math.abs(o[1] - c[1]) < 1e-3 &&
+            Math.abs(o[2] - c[2]) <= 1e-3 * (1 + Math.abs(c[2])) && Math.abs(o[3] - c[3]) <= 1e-3 * (1 + Math.abs(c[3])));
+        if (!dup) out.push(c);
+    }
+    return out;
+}
+
+function emitSplat (x, y, dx, dy, color, dyeScale) {
+    const k = dyeScale == null ? 1 : dyeScale;
+    const c = { r: color.r * k, g: color.g * k, b: color.b * k };
+    symmetryCopies(x, y, dx, dy).forEach(s => splat(s[0], s[1], s[2], s[3], c));
+}
+
+// Auto-play: three wandering streams on slow, never-repeating paths
+const autoplay = { t: Math.random() * 100, prev: [], burst: 2.5 };
+
+function updateAutoplay (dt) {
+    if (!config.AUTOPLAY || config.PAUSED) { autoplay.prev.length = 0; return; }
+    autoplay.t += dt * config.SPEED;
+    const t = autoplay.t;
+    const force = config.SPLAT_FORCE * config.INTENSITY * 3.0;
+
+    for (let k = 0; k < 3; k++) {
+        const s = k * 2.17 + 0.5;
+        const x = 0.5 + 0.34 * Math.sin(t * (0.53 + 0.11 * k) + s) * Math.cos(t * (0.21 + 0.05 * k) + s * 1.7)
+                      + 0.1 * Math.sin(t * (1.13 + 0.17 * k) + s * 3.1);
+        const y = 0.5 + 0.34 * Math.sin(t * (0.41 + 0.07 * k) + s * 2.3) * Math.cos(t * (0.17 + 0.04 * k) + s * 0.9)
+                      + 0.1 * Math.cos(t * (0.97 + 0.13 * k) + s * 1.3);
+        const prev = autoplay.prev[k];
+        autoplay.prev[k] = { x, y };
+        if (!prev) continue;
+        const dx = correctDeltaX(x - prev.x) * force;
+        const dy = correctDeltaY(y - prev.y) * force;
+        emitSplat(x, y, dx, dy, colorAt(k / 3 + t * 0.04), 0.7);
+    }
+
+    autoplay.burst -= dt * config.SPEED;
+    if (autoplay.burst <= 0) {
+        autoplay.burst = 3 + Math.random() * 4;
+        const color = colorAt(Math.random());
+        const a = Math.random() * Math.PI * 2;
+        const v = 900 * config.INTENSITY;
+        emitSplat(0.15 + Math.random() * 0.7, 0.15 + Math.random() * 0.7, Math.cos(a) * v, Math.sin(a) * v, color, 8);
+    }
+}
+
+// Vortex: arms orbiting the center, stirring a continuous whirlpool
+const vortex = { t: 0, prev: [] };
+
+function updateVortex (dt) {
+    if (!config.VORTEX || config.PAUSED) { vortex.prev.length = 0; return; }
+    vortex.t += dt * config.SPEED;
+    const t = vortex.t;
+    const ar = canvas.width / canvas.height;
+    const mind = Math.min(ar, 1);
+    const arms = 3;
+    const rad = (0.2 + 0.07 * Math.sin(t * 0.6)) * mind;
+    const force = config.SPLAT_FORCE * config.INTENSITY * 2.5;
+
+    for (let k = 0; k < arms; k++) {
+        const a = t * 1.6 + (Math.PI * 2 * k) / arms;
+        const x = (rad * Math.cos(a)) / ar + 0.5;
+        const y = rad * Math.sin(a) + 0.5;
+        const prev = vortex.prev[k];
+        vortex.prev[k] = { x, y };
+        if (!prev) continue;
+        const dx = correctDeltaX(x - prev.x) * force;
+        const dy = correctDeltaY(y - prev.y) * force;
+        emitSplat(x, y, dx, dy, colorAt(k / arms + t * 0.05), 0.7);
+    }
+}
+
+// Random color injection: a burst of fresh, random colors at each new touch
+let injectQueue = [];
+
+function queueInjection (x, y) {
+    if (config.RANDOM_INJECTION) injectQueue.push({ x, y });
+}
+
+function applyInjections () {
+    while (injectQueue.length > 0) {
+        const p = injectQueue.shift();
+        const count = 5;
+        const ar = canvas.width / canvas.height;
+        for (let i = 0; i < count; i++) {
+            const a = (Math.PI * 2 * i) / count + Math.random() * 0.6;
+            const r = 0.03;
+            const color = finishColor(HSVtoRGB(Math.random(), 1.0, 1.0));
+            const v = 450 * config.INTENSITY;
+            emitSplat(p.x + (Math.cos(a) * r) / ar, p.y + Math.sin(a) * r,
+                      Math.cos(a) * v, Math.sin(a) * v, color, 3);
+        }
+    }
+}
+
+// Background: crossfades smoothly between presets
+const bgCurrent = { top: { r: 0, g: 0, b: 0 }, bottom: { r: 0, g: 0, b: 0 }, glow: { r: 0, g: 0, b: 0 } };
+let bgInitialized = false;
+
+function backgroundTarget () {
+    const preset = BACKGROUNDS[config.BACKGROUND];
+    let top, bottom, glow;
+    if (preset) {
+        top = hexToRGB(preset[0]);
+        bottom = hexToRGB(preset[1]);
+        glow = hexToRGB(preset[2]);
+    } else {
+        top = bottom = normalizeColor(config.BACK_COLOR);
+        glow = { r: 0, g: 0, b: 0 };
+    }
+    if (config.BLACKLIGHT) {
+        top = lerpColor(top, { r: 0.02, g: 0.0, b: 0.06 }, 0.6);
+        bottom = lerpColor(bottom, { r: 0.0, g: 0.0, b: 0.02 }, 0.6);
+        glow = { r: glow.r + 0.12, g: glow.g, b: glow.b + 0.28 };
+    }
+    return { top, bottom, glow };
+}
+
+function updateBackground (dt) {
+    const target = backgroundTarget();
+    const k = bgInitialized ? 1 - Math.exp(-dt * 5) : 1;
+    bgInitialized = true;
+    bgCurrent.top = lerpColor(bgCurrent.top, target.top, k);
+    bgCurrent.bottom = lerpColor(bgCurrent.bottom, target.bottom, k);
+    bgCurrent.glow = lerpColor(bgCurrent.glow, target.glow, k);
+}
+
+function pick (list) {
+    return list[Math.floor(Math.random() * list.length)];
+}
+
+function rand (min, max) {
+    return min + Math.random() * (max - min);
+}
+
+// Randomize: a fresh, good-looking configuration in one tap
+function randomizeConfig () {
+    const palette = pick(PALETTE_NAMES);
+    const background = pick(['Black', 'Black', 'Midnight', 'Nebula', 'Deep Ocean', 'Ember', 'Forest', 'Charcoal']);
+    setPalette(palette, 0.6);
+    config.BACKGROUND = background;
+    config.CURL = Math.round(rand(5, 45));
+    config.SPLAT_RADIUS = rand(0.12, 0.5);
+    config.DENSITY_DISSIPATION = rand(0.4, 1.8);
+    config.VELOCITY_DISSIPATION = rand(0.1, 0.8);
+    config.BLOOM_INTENSITY = rand(0.5, 1.3);
+    config.BLOOM_THRESHOLD = rand(0.45, 0.75);
+    config.SUNRAYS_WEIGHT = rand(0.5, 1.0);
+    config.RAINBOW = Math.random() < 0.25;
+    config.TRAILS = Math.random() < 0.3;
+    config.BLACKLIGHT = Math.random() < 0.2;
+    const sym = Math.random();
+    config.MIRROR = sym >= 0.5 && sym < 0.75;
+    config.KALEIDOSCOPE = sym >= 0.75;
+    config.KALEIDO_SEGMENTS = Math.round(rand(3, 8));
+    updateKeywords();
+    refreshGUI();
+    splatStack.push(Math.round(rand(8, 18)));
+
+    let label = palette + ' · ' + background;
+    if (config.KALEIDOSCOPE) label += ' · Kaleidoscope';
+    else if (config.MIRROR) label += ' · Mirror';
+    showToast(label);
+}
+
+function toggleFreeze () {
+    config.PAUSED = !config.PAUSED;
+    showToast(config.PAUSED ? 'Frozen' : 'Resumed');
+}
+
+function toggleMode (key, label) {
+    config[key] = !config[key];
+    if (key === 'MIRROR' && config.MIRROR) config.KALEIDOSCOPE = false;
+    if (key === 'KALEIDOSCOPE' && config.KALEIDOSCOPE) config.MIRROR = false;
+    if (key === 'BLACKLIGHT') updateKeywords();
+    showToast(label + (config[key] ? ' on' : ' off'));
+}
+
+function cyclePalette () {
+    const next = nextPaletteName();
+    setPalette(next, 1.2);
+    showToast('Palette · ' + next);
+}
+
+// GUI helpers
+
+let guiRoot = null;
+
+function refreshGUI (gui) {
+    gui = gui || guiRoot;
+    if (!gui) return;
+    gui.__controllers.forEach(c => c.updateDisplay());
+    Object.keys(gui.__folders).forEach(k => refreshGUI(gui.__folders[k]));
+}
+
+let toastTimer = null;
+
+function showToast (text) {
+    const el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
+}
+
+const toolbarState = {};
+
+function syncToolbar () {
+    const set = (id, on) => {
+        if (toolbarState[id] === on) return;
+        toolbarState[id] = on;
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle('active', on);
+        el.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (id === 'tb-freeze') el.querySelector('.tb-label').textContent = on ? 'Resume' : 'Freeze';
+    };
+    set('tb-autoplay', !!config.AUTOPLAY);
+    set('tb-vortex', !!config.VORTEX);
+    set('tb-freeze', !!config.PAUSED);
+}
+
+function setupToolbar () {
+    const on = (id, fn) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', e => { e.preventDefault(); fn(); refreshGUI(); });
+    };
+    on('tb-randomize', randomizeConfig);
+    on('tb-palette', cyclePalette);
+    on('tb-autoplay', () => toggleMode('AUTOPLAY', 'Auto-play'));
+    on('tb-vortex', () => toggleMode('VORTEX', 'Vortex'));
+    on('tb-freeze', toggleFreeze);
+}
+
+setupToolbar();
 
 function pointerPrototype () {
     this.id = -1;
@@ -178,32 +588,68 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
 
 function startGUI () {
     var gui = new dat.GUI({ width: 300 });
-    gui.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
-    gui.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    gui.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion');
-    gui.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion');
-    gui.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
-    gui.add(config, 'CURL', 0, 50).name('vorticity').step(1);
-    gui.add(config, 'SPLAT_RADIUS', 0.01, 1.0).name('splat radius');
-    gui.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
-    gui.add(config, 'COLORFUL').name('colorful');
-    gui.add(config, 'PAUSED').name('paused').listen();
+    guiRoot = gui;
 
+    gui.add({ fun: randomizeConfig }, 'fun').name('✨ Randomize');
+    gui.add({ fun: () => { toggleFreeze(); } }, 'fun').name('❄ Freeze / Resume');
     gui.add({ fun: () => {
         splatStack.push(parseInt(Math.random() * 20) + 5);
     } }, 'fun').name('Random splats');
 
+    let modesFolder = gui.addFolder('Modes');
+    modesFolder.add(config, 'AUTOPLAY').name('auto-play').listen();
+    modesFolder.add(config, 'VORTEX').name('vortex').listen();
+    modesFolder.add(config, 'MIRROR').name('mirror').listen().onChange(v => {
+        if (v) config.KALEIDOSCOPE = false;
+    });
+    modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').listen().onChange(v => {
+        if (v) config.MIRROR = false;
+    });
+    modesFolder.add(config, 'KALEIDO_SEGMENTS', 2, 10).step(1).name('segments').listen();
+    modesFolder.add(config, 'RAINBOW').name('rainbow').listen();
+    modesFolder.add(config, 'RAINBOW_SPEED', 0.02, 1.0).name('rainbow speed');
+    modesFolder.add(config, 'BLACKLIGHT').name('blacklight').listen().onChange(updateKeywords);
+    modesFolder.add(config, 'TRAILS').name('color trails').listen();
+    modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch').listen();
+    modesFolder.open();
+
+    let colorsFolder = gui.addFolder('Colors');
+    colorsFolder.add(config, 'PALETTE', PALETTE_NAMES).name('palette').listen().onChange(v => setPalette(v, 1.2));
+    colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions').listen();
+    colorsFolder.add(config, 'TRANSITION_TIME', 3, 30).step(1).name('seconds per palette');
+    colorsFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background').listen();
+    colorsFolder.open();
+
+    let motionFolder = gui.addFolder('Motion');
+    motionFolder.add(config, 'SPEED', 0.1, 3.0).name('speed').listen();
+    motionFolder.add(config, 'INTENSITY', 0.1, 3.0).name('intensity').listen();
+    motionFolder.open();
+
+    let simFolder = gui.addFolder('Simulation');
+    simFolder.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
+    simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
+    simFolder.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion').listen();
+    simFolder.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion').listen();
+    simFolder.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
+    simFolder.add(config, 'CURL', 0, 50).name('vorticity').step(1).listen();
+    simFolder.add(config, 'SPLAT_RADIUS', 0.01, 1.0).name('splat radius').listen();
+    simFolder.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
+    simFolder.add(config, 'COLORFUL').name('colorful');
+    simFolder.add(config, 'PAUSED').name('paused').listen();
+
     let bloomFolder = gui.addFolder('Bloom');
     bloomFolder.add(config, 'BLOOM').name('enabled').onFinishChange(updateKeywords);
-    bloomFolder.add(config, 'BLOOM_INTENSITY', 0.1, 2.0).name('intensity');
-    bloomFolder.add(config, 'BLOOM_THRESHOLD', 0.0, 1.0).name('threshold');
+    bloomFolder.add(config, 'BLOOM_INTENSITY', 0.1, 2.0).name('intensity').listen();
+    bloomFolder.add(config, 'BLOOM_THRESHOLD', 0.0, 1.0).name('threshold').listen();
 
     let sunraysFolder = gui.addFolder('Sunrays');
     sunraysFolder.add(config, 'SUNRAYS').name('enabled').onFinishChange(updateKeywords);
-    sunraysFolder.add(config, 'SUNRAYS_WEIGHT', 0.3, 1.0).name('weight');
+    sunraysFolder.add(config, 'SUNRAYS_WEIGHT', 0.3, 1.0).name('weight').listen();
 
     let captureFolder = gui.addFolder('Capture');
-    captureFolder.addColor(config, 'BACK_COLOR').name('background color');
+    captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
+        config.BACKGROUND = 'Custom';
+    });
     captureFolder.add(config, 'TRANSPARENT').name('transparent');
     captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
 
@@ -477,6 +923,27 @@ const checkerboardShader = compileShader(gl.FRAGMENT_SHADER, `
     }
 `);
 
+const backgroundShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision highp float;
+
+    varying vec2 vUv;
+    uniform vec3 top;
+    uniform vec3 bottom;
+    uniform vec3 glow;
+    uniform float aspectRatio;
+
+    void main () {
+        vec3 c = mix(bottom, top, smoothstep(0.0, 1.0, vUv.y));
+        vec2 p = (vUv - 0.5) * vec2(aspectRatio, 1.0);
+        float r = length(p);
+        c += glow * exp(-r * r * 3.0);
+        c *= 1.0 - 0.35 * smoothstep(0.45, 1.2, r);
+        float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        c += (n - 0.5) / 255.0;
+        gl_FragColor = vec4(max(c, 0.0), 1.0);
+    }
+`);
+
 const displayShaderSource = `
     precision highp float;
     precision highp sampler2D;
@@ -535,6 +1002,11 @@ const displayShaderSource = `
         bloom += noise / 255.0;
         bloom = linearToGamma(bloom);
         c += bloom;
+    #endif
+
+    #ifdef BLACKLIGHT
+        float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = max(mix(vec3(lum), c, 1.6), 0.0) * 1.2;
     #endif
 
         float a = max(c.r, max(c.g, c.b));
@@ -901,6 +1373,7 @@ const bloomFinalProgram      = new Program(baseVertexShader, bloomFinalShader);
 const sunraysMaskProgram     = new Program(baseVertexShader, sunraysMaskShader);
 const sunraysProgram         = new Program(baseVertexShader, sunraysShader);
 const splatProgram           = new Program(baseVertexShader, splatShader);
+const backgroundProgram      = new Program(baseVertexShader, backgroundShader);
 const advectionProgram       = new Program(baseVertexShader, advectionShader);
 const divergenceProgram      = new Program(baseVertexShader, divergenceShader);
 const curlProgram            = new Program(baseVertexShader, curlShader);
@@ -1093,6 +1566,7 @@ function updateKeywords () {
     if (config.SHADING) displayKeywords.push("SHADING");
     if (config.BLOOM) displayKeywords.push("BLOOM");
     if (config.SUNRAYS) displayKeywords.push("SUNRAYS");
+    if (config.BLACKLIGHT) displayKeywords.push("BLACKLIGHT");
     displayMaterial.setKeywords(displayKeywords);
 }
 
@@ -1109,10 +1583,19 @@ function update () {
     if (resizeCanvas())
         initFramebuffers();
     updateColors(dt);
+    updatePalette(dt);
+    updateBackground(dt);
     applyInputs();
-    if (!config.PAUSED)
-        step(dt);
+    updateAutoplay(dt);
+    updateVortex(dt);
+    if (!config.PAUSED) {
+        const simDt = dt * config.SPEED;
+        const substeps = Math.max(1, Math.ceil(simDt / 0.016667 - 1e-6));
+        for (let i = 0; i < substeps; i++)
+            step(simDt / substeps);
+    }
     render(null);
+    syncToolbar();
     requestAnimationFrame(update);
 }
 
@@ -1136,6 +1619,14 @@ function resizeCanvas () {
 }
 
 function updateColors (dt) {
+    rainbowHue = frac(rainbowHue + dt * config.RAINBOW_SPEED);
+    if (config.RAINBOW) {
+        pointers.forEach((p, i) => {
+            p.color = colorAt(i * 0.13);
+        });
+        return;
+    }
+
     if (!config.COLORFUL) return;
 
     colorUpdateTimer += dt * config.COLOR_UPDATE_SPEED;
@@ -1150,6 +1641,7 @@ function updateColors (dt) {
 function applyInputs () {
     if (splatStack.length > 0)
         multipleSplats(splatStack.pop());
+    applyInjections();
 
     pointers.forEach(p => {
         if (p.moved) {
@@ -1219,7 +1711,7 @@ function step (dt) {
         gl.uniform2f(advectionProgram.uniforms.dyeTexelSize, dye.texelSizeX, dye.texelSizeY);
     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
     gl.uniform1i(advectionProgram.uniforms.uSource, dye.read.attach(1));
-    gl.uniform1f(advectionProgram.uniforms.dissipation, config.DENSITY_DISSIPATION);
+    gl.uniform1f(advectionProgram.uniforms.dissipation, config.TRAILS ? config.DENSITY_DISSIPATION * 0.12 : config.DENSITY_DISSIPATION);
     blit(dye.write);
     dye.swap();
 }
@@ -1241,7 +1733,7 @@ function render (target) {
     }
 
     if (!config.TRANSPARENT)
-        drawColor(target, normalizeColor(config.BACK_COLOR));
+        drawBackground(target);
     if (target == null && config.TRANSPARENT)
         drawCheckerboard(target);
     drawDisplay(target);
@@ -1250,6 +1742,17 @@ function render (target) {
 function drawColor (target, color) {
     colorProgram.bind();
     gl.uniform4f(colorProgram.uniforms.color, color.r, color.g, color.b, 1);
+    blit(target);
+}
+
+function drawBackground (target) {
+    let width = target == null ? gl.drawingBufferWidth : target.width;
+    let height = target == null ? gl.drawingBufferHeight : target.height;
+    backgroundProgram.bind();
+    gl.uniform3f(backgroundProgram.uniforms.top, bgCurrent.top.r, bgCurrent.top.g, bgCurrent.top.b);
+    gl.uniform3f(backgroundProgram.uniforms.bottom, bgCurrent.bottom.r, bgCurrent.bottom.g, bgCurrent.bottom.b);
+    gl.uniform3f(backgroundProgram.uniforms.glow, bgCurrent.glow.r, bgCurrent.glow.g, bgCurrent.glow.b);
+    gl.uniform1f(backgroundProgram.uniforms.aspectRatio, width / height);
     blit(target);
 }
 
@@ -1350,9 +1853,9 @@ function blur (target, temp, iterations) {
 }
 
 function splatPointer (pointer) {
-    let dx = pointer.deltaX * config.SPLAT_FORCE;
-    let dy = pointer.deltaY * config.SPLAT_FORCE;
-    splat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color);
+    let dx = pointer.deltaX * config.SPLAT_FORCE * config.INTENSITY;
+    let dy = pointer.deltaY * config.SPLAT_FORCE * config.INTENSITY;
+    emitSplat(pointer.texcoordX, pointer.texcoordY, dx, dy, pointer.color);
 }
 
 function multipleSplats (amount) {
@@ -1363,9 +1866,9 @@ function multipleSplats (amount) {
         color.b *= 10.0;
         const x = Math.random();
         const y = Math.random();
-        const dx = 1000 * (Math.random() - 0.5);
-        const dy = 1000 * (Math.random() - 0.5);
-        splat(x, y, dx, dy, color);
+        const dx = 1000 * config.INTENSITY * (Math.random() - 0.5);
+        const dy = 1000 * config.INTENSITY * (Math.random() - 0.5);
+        emitSplat(x, y, dx, dy, color);
     }
 }
 
@@ -1448,10 +1951,28 @@ window.addEventListener('touchend', e => {
 });
 
 window.addEventListener('keydown', e => {
-    if (e.code === 'KeyP')
-        config.PAUSED = !config.PAUSED;
-    if (e.key === ' ')
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+    if (e.key === ' ') {
+        e.preventDefault();
         splatStack.push(parseInt(Math.random() * 20) + 5);
+    }
+    switch (e.code) {
+        case 'KeyP':
+        case 'KeyF': toggleFreeze(); break;
+        case 'KeyR': randomizeConfig(); break;
+        case 'KeyC': cyclePalette(); break;
+        case 'KeyA': toggleMode('AUTOPLAY', 'Auto-play'); break;
+        case 'KeyV': toggleMode('VORTEX', 'Vortex'); break;
+        case 'KeyM': toggleMode('MIRROR', 'Mirror'); break;
+        case 'KeyK': toggleMode('KALEIDOSCOPE', 'Kaleidoscope'); break;
+        case 'KeyB': toggleMode('BLACKLIGHT', 'Blacklight'); break;
+        case 'KeyT': toggleMode('TRAILS', 'Color trails'); break;
+        case 'KeyN': toggleMode('RAINBOW', 'Rainbow'); break;
+        case 'KeyI': toggleMode('RANDOM_INJECTION', 'Random color on touch'); break;
+        case 'KeyH': document.body.classList.toggle('hide-ui'); break;
+        default: return;
+    }
+    refreshGUI();
 });
 
 function updatePointerDownData (pointer, id, posX, posY) {
@@ -1465,6 +1986,7 @@ function updatePointerDownData (pointer, id, posX, posY) {
     pointer.deltaX = 0;
     pointer.deltaY = 0;
     pointer.color = generateColor();
+    queueInjection(pointer.texcoordX, pointer.texcoordY);
 }
 
 function updatePointerMoveData (pointer, posX, posY) {
@@ -1494,11 +2016,9 @@ function correctDeltaY (delta) {
 }
 
 function generateColor () {
-    let c = HSVtoRGB(Math.random(), 1.0, 1.0);
-    c.r *= 0.15;
-    c.g *= 0.15;
-    c.b *= 0.15;
-    return c;
+    if (config.RAINBOW)
+        return colorAt(Math.random() * 0.08);
+    return finishColor(samplePalette(Math.random()));
 }
 
 function HSVtoRGB (h, s, v) {
