@@ -8,7 +8,7 @@ An interactive WebGL fluid simulation that runs in desktop and mobile browsers. 
 
 ## Features
 
-The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **Auto-play**, **Vortex** and **Freeze**. Everything else is in the controls panel (top right).
+Everything is in the controls panel (top right). Its top rows give one-tap access to **Randomize**, **Freeze / Resume**, **Next palette**, **Auto-play** and **Vortex**.
 
 | Feature | What it does | Key |
 |---|---|---|
@@ -29,7 +29,7 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Random color on touch | Each new touch injects a burst of random colors | I |
 | Auto transitions | Smoothly crossfades to the next palette every few seconds | |
 
-Space adds random splats, H hides the toolbar and panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles, L cycles the particle style and Q cycles the simulation mode.
+Space adds random splats, H hides the controls panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles, L cycles the particle style and Q cycles the simulation mode.
 
 ## Settings
 

@@ -540,36 +540,15 @@ function showToast (text) {
     toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
 }
 
-const toolbarState = {};
+let freezeController = null;
+let freezeShown = null;
 
-function syncToolbar () {
-    const set = (id, on) => {
-        if (toolbarState[id] === on) return;
-        toolbarState[id] = on;
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.classList.toggle('active', on);
-        el.setAttribute('aria-pressed', on ? 'true' : 'false');
-        if (id === 'tb-freeze') el.querySelector('.tb-label').textContent = on ? 'Resume' : 'Freeze';
-    };
-    set('tb-autoplay', !!config.AUTOPLAY);
-    set('tb-vortex', !!config.VORTEX);
-    set('tb-freeze', !!config.PAUSED);
+// Keeps the Freeze button label in step with the current state
+function syncTopMenu () {
+    if (!freezeController || freezeShown === config.PAUSED) return;
+    freezeShown = config.PAUSED;
+    freezeController.name(config.PAUSED ? '▶ Resume' : '❄ Freeze');
 }
-
-function setupToolbar () {
-    const on = (id, fn) => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('click', e => { e.preventDefault(); fn(); refreshGUI(); });
-    };
-    on('tb-randomize', randomizeConfig);
-    on('tb-palette', cyclePalette);
-    on('tb-autoplay', () => toggleMode('AUTOPLAY', 'Auto-play'));
-    on('tb-vortex', () => toggleMode('VORTEX', 'Vortex'));
-    on('tb-freeze', toggleFreeze);
-}
-
-setupToolbar();
 
 function pointerPrototype () {
     this.id = -1;
@@ -1987,7 +1966,10 @@ function startGUI () {
     guiRoot = gui;
 
     gui.add({ fun: randomizeConfig }, 'fun').name('✨ Randomize');
-    gui.add({ fun: () => { toggleFreeze(); } }, 'fun').name('❄ Freeze / Resume');
+    freezeController = gui.add({ fun: () => { toggleFreeze(); } }, 'fun').name('❄ Freeze');
+    gui.add({ fun: cyclePalette }, 'fun').name('🎨 Next palette');
+    gui.add(config, 'AUTOPLAY').name('auto-play').listen();
+    gui.add(config, 'VORTEX').name('vortex').listen();
     gui.add({ fun: () => {
         splatStack.push(parseInt(Math.random() * 20) + 5);
     } }, 'fun').name('Random splats');
@@ -3717,7 +3699,7 @@ function update () {
     }
     updateParticles(dt);
     render(null, dt);
-    syncToolbar();
+    syncTopMenu();
     requestAnimationFrame(update);
 }
 

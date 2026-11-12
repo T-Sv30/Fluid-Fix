@@ -54,89 +54,6 @@
                 border-radius: 0 0 8px 8px;
             }
 
-            /* Toolbar */
-
-            .toolbar {
-                position: fixed;
-                left: 50%;
-                bottom: calc(14px + env(safe-area-inset-bottom, 0px));
-                transform: translateX(-50%);
-                z-index: 5;
-                display: flex;
-                gap: 4px;
-                padding: 6px;
-                max-width: calc(100vw - 24px);
-                box-sizing: border-box;
-                border-radius: 22px;
-                background: rgba(16, 16, 22, 0.55);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-                -webkit-backdrop-filter: blur(16px) saturate(160%);
-                backdrop-filter: blur(16px) saturate(160%);
-                transition: opacity 0.3s ease, transform 0.3s ease;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            }
-
-            .tb-btn {
-                -webkit-tap-highlight-color: transparent;
-                appearance: none;
-                border: 0;
-                margin: 0;
-                width: 62px;
-                padding: 8px 0 6px;
-                border-radius: 16px;
-                background: transparent;
-                color: rgba(255, 255, 255, 0.82);
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 4px;
-                cursor: pointer;
-                transition: background 0.2s ease, color 0.2s ease, transform 0.12s ease;
-            }
-
-            .tb-btn svg {
-                width: 22px;
-                height: 22px;
-                fill: none;
-                stroke: currentColor;
-                stroke-width: 1.8;
-                stroke-linecap: round;
-                stroke-linejoin: round;
-            }
-
-            .tb-label {
-                font-size: 10.5px;
-                font-weight: 600;
-                letter-spacing: 0.02em;
-            }
-
-            .tb-btn:hover {
-                background: rgba(255, 255, 255, 0.08);
-                color: #fff;
-            }
-
-            .tb-btn:active {
-                transform: scale(0.92);
-            }
-
-            .tb-btn:focus-visible {
-                outline: 2px solid rgba(160, 200, 255, 0.8);
-                outline-offset: 1px;
-            }
-
-            .tb-btn.active {
-                color: #fff;
-                background: linear-gradient(135deg, rgba(124, 58, 237, 0.85), rgba(14, 165, 233, 0.85));
-                box-shadow: 0 0 18px rgba(99, 102, 241, 0.55);
-            }
-
-            #tb-freeze.active {
-                background: linear-gradient(135deg, rgba(56, 189, 248, 0.9), rgba(186, 230, 253, 0.75));
-                color: #04202e;
-                box-shadow: 0 0 18px rgba(125, 211, 252, 0.6);
-            }
-
             /* Toast */
 
             .toast {
@@ -169,15 +86,11 @@
                 transform: translate(-50%, 0);
             }
 
-            body.hide-ui .toolbar,
             body.hide-ui .dg.ac {
                 opacity: 0;
                 pointer-events: none;
             }
 
-            @media (max-width: 360px) {
-                .tb-btn { width: 54px; }
-                .tb-label { font-size: 9.5px; }
             }
 
         </style>
@@ -187,28 +100,6 @@
 
         <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-        <nav class="toolbar" aria-label="Quick controls">
-            <button class="tb-btn" id="tb-randomize" title="Randomize (R)">
-                <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
-                <span class="tb-label">Randomize</span>
-            </button>
-            <button class="tb-btn" id="tb-palette" title="Next palette (C)">
-                <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.4-1.9-.3-1 .3-2.1 1.4-2.1H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>
-                <span class="tb-label">Palette</span>
-            </button>
-            <button class="tb-btn" id="tb-autoplay" title="Auto-play (A)" aria-pressed="false">
-                <svg viewBox="0 0 24 24"><path d="M3 12c2.5-5 5.5-5 8 0s5.5 5 8 0"/><path d="M3 17c2.5-3 5.5-3 8 0s5.5 3 8 0" opacity="0.6"/><path d="M3 7c2.5-3 5.5-3 8 0s5.5 3 8 0" opacity="0.6"/></svg>
-                <span class="tb-label">Auto-play</span>
-            </button>
-            <button class="tb-btn" id="tb-vortex" title="Vortex (V)" aria-pressed="false">
-                <svg viewBox="0 0 24 24"><path d="M12 12a1.5 1.5 0 1 1 1.5 1.5"/><path d="M13.5 13.5A4 4 0 1 1 16 9"/><path d="M16 9a7 7 0 1 1-9.5 9"/></svg>
-                <span class="tb-label">Vortex</span>
-            </button>
-            <button class="tb-btn" id="tb-freeze" title="Freeze / resume (F)" aria-pressed="false">
-                <svg viewBox="0 0 24 24"><path d="M12 2v20M4 7l16 10M20 7L4 17"/><path d="M9.5 3.5L12 6l2.5-2.5M9.5 20.5L12 18l2.5 2.5"/></svg>
-                <span class="tb-label">Freeze</span>
-            </button>
-        </nav>
 
         <script src="./script.js"></script>
     </body>
