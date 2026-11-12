@@ -154,6 +154,8 @@ let config = {
     PARTICLE_TRAILS: false,
     PARTICLE_COLOR_MODE: 'Fluid Color',
     PARTICLE_COLOR: { r: 120, g: 220, b: 255 },
+    // Stage 5
+    SIM_MODE: 'Standard Fluid',
 }
 
 
@@ -866,8 +868,10 @@ function updateTouches (dt) {
         if (p.down) p.heldTime = (p.heldTime || 0) + dt;
 
         const x = p.texcoordX, y = p.texcoordY;
-        const vx = p.deltaX * config.SPLAT_FORCE * force;
-        const vy = p.deltaY * config.SPLAT_FORCE * force;
+        // Reverse Flow: the fluid moves against your finger
+        const dirSign = config.SIM_MODE === 'Reverse Flow' ? -1 : 1;
+        const vx = p.deltaX * config.SPLAT_FORCE * force * dirSign;
+        const vy = p.deltaY * config.SPLAT_FORCE * force * dirSign;
 
         switch (config.GESTURE) {
             case 'Push':
@@ -1686,6 +1690,208 @@ function particleMixAmount () {
     return Math.min(1, 2 * config.PARTICLE_MIX / 100);
 }
 
+// Stage 5: simulation modes (presets of existing forces + a small driver that keeps each scene alive)
+
+// Everything a mode may change. Standard Fluid restores exactly these values.
+const MODE_BASE = {
+    FORCE_FIELD: 'None', FIELD_STRENGTH: 50, SWIRL: 0, TURBULENCE: 0, GRAVITY: 0, BUOYANCY: 50,
+    FLOW_DIRECTION: 'None', FLOW_SPEED: 30, CURL: 30, EDGE: 'Wall', VORTEX: false,
+    DENSITY_DISSIPATION: 1, VELOCITY_DISSIPATION: 0.2,
+};
+
+const SIM_MODES = {
+    'Standard Fluid': {},
+    'Vortex':         { VORTEX: true, FORCE_FIELD: 'Vortex', FIELD_STRENGTH: 35 },
+    'Whirlpool':      { FORCE_FIELD: 'Spiral', FIELD_STRENGTH: 70, CURL: 20 },
+    'Tornado':        { BUOYANCY: 85, TURBULENCE: 25, CURL: 45 },
+    'Explosion':      { CURL: 35, DENSITY_DISSIPATION: pctFadeTo(65), VELOCITY_DISSIPATION: 0.5 },
+    'Fountain':       { GRAVITY: 55, CURL: 15 },
+    'Waterfall':      { GRAVITY: 70, FLOW_DIRECTION: 'Down', FLOW_SPEED: 40, EDGE: 'Void', CURL: 20 },
+    'Waves':          { FORCE_FIELD: 'Wave', FIELD_STRENGTH: 70, EDGE: 'Wrap', FLOW_DIRECTION: 'Right', FLOW_SPEED: 35, CURL: 15 },
+    'Orbit':          { FORCE_FIELD: 'Attractor', FIELD_STRENGTH: 30, CURL: 10 },
+    'Magnetic':       { FORCE_FIELD: 'Magnetic', FIELD_STRENGTH: 80, CURL: 10 },
+    'Plasma':         { TURBULENCE: 70, CURL: 50, VELOCITY_DISSIPATION: 0.3 },
+    'Galaxy':         { FORCE_FIELD: 'Vortex', FIELD_STRENGTH: 45, CURL: 25 },
+    'Black Hole':     { FORCE_FIELD: 'Spiral', FIELD_STRENGTH: 85, CURL: 20 },
+    'Reverse Flow':   {},
+};
+const SIM_MODE_NAMES = Object.keys(SIM_MODES);
+
+const modeState = { t: 0, timer: 0, prev: [] };
+
+function applySimMode (name) {
+    if (!SIM_MODES.hasOwnProperty(name)) return;
+    Object.assign(config, MODE_BASE, SIM_MODES[name]);
+    config.SIM_MODE = name;
+    modeState.t = 0;
+    modeState.timer = 0;
+    modeState.prev = [];
+    onEdgeChange();
+    refreshGUI();
+}
+
+function cycleSimMode () {
+    const i = SIM_MODE_NAMES.indexOf(config.SIM_MODE);
+    applySimMode(SIM_MODE_NAMES[(i + 1) % SIM_MODE_NAMES.length]);
+    showToast('Mode · ' + config.SIM_MODE);
+}
+
+// Converts centered height-unit coordinates to texture coordinates
+function centeredToUV (px, py) {
+    const ar = canvas.width / canvas.height;
+    return [px / ar + 0.5, py + 0.5];
+}
+
+// Emitter that remembers its last position so it can push fluid along its own path
+function trackedEmit (key, x, y, color, dyeScale, boost) {
+    const prev = modeState.prev[key];
+    modeState.prev[key] = { x, y };
+    if (!prev) return;
+    const force = config.SPLAT_FORCE * config.INTENSITY * (boost || 1);
+    emitSplat(x, y, correctDeltaX(x - prev.x) * force, correctDeltaY(y - prev.y) * force, color, dyeScale);
+}
+
+function updateSimMode (dt) {
+    if (config.PAUSED || config.SIM_MODE === 'Standard Fluid' || config.SIM_MODE === 'Reverse Flow' || config.SIM_MODE === 'Vortex') {
+        modeState.prev = [];
+        return;
+    }
+    const sdt = dt * config.SPEED;
+    modeState.t += sdt;
+    modeState.timer -= sdt;
+    const t = modeState.t;
+    const ar = canvas.width / canvas.height;
+    const mind = Math.min(ar, 1);
+    const F = config.INTENSITY;
+
+    switch (config.SIM_MODE) {
+        case 'Whirlpool': {
+            // Color pours in at the rim and drains away in the middle
+            for (let k = 0; k < 2; k++) {
+                const a = t * 0.9 + Math.PI * k;
+                const r = 0.42 * mind;
+                const [x, y] = centeredToUV(Math.cos(a) * r, Math.sin(a) * r);
+                emitSplat(x, y, -Math.sin(a) * 600 * F - Math.cos(a) * 150 * F, Math.cos(a) * 600 * F - Math.sin(a) * 150 * F,
+                          colorAt(k * 0.5 + t * 0.03), 0.8);
+            }
+            pointEffect(0.5, 0.5, { fade: Math.min(1, 3 * sdt), area: 1.5 });
+            break;
+        }
+        case 'Tornado': {
+            // A rising column from a swaying base, twisted from side to side
+            const bx = 0.5 + 0.06 * Math.sin(t * 0.8) / ar;
+            emitSplat(bx, 0.07, Math.sin(t * 5) * 400 * F, 900 * F, colorAt(t * 0.05), 1.0);
+            const ty = 0.35 + 0.25 * Math.sin(t * 0.5);
+            splatVelocity(bx + 0.03 * Math.sin(t * 2.3), ty, Math.sin(t * 6) * 700 * F, 0, 1.2);
+            break;
+        }
+        case 'Explosion': {
+            if (modeState.timer <= 0) {
+                modeState.timer = 1.6 + Math.random() * 1.4;
+                const cx = 0.25 + Math.random() * 0.5, cy = 0.25 + Math.random() * 0.5;
+                const base = Math.random();
+                for (let i = 0; i < 18; i++) {
+                    const a = (Math.PI * 2 * i) / 18 + Math.random() * 0.2;
+                    const v = (1800 + Math.random() * 1200) * F;
+                    emitSplat(cx, cy, Math.cos(a) * v, Math.sin(a) * v, colorAt(base + i / 18 * 0.3), 4);
+                }
+                emitSplat(cx, cy, 0, 0, colorAt(base), 6);
+            }
+            break;
+        }
+        case 'Fountain': {
+            // An upward jet that arcs over and falls back under gravity
+            const a = Math.PI / 2 + 0.25 * Math.sin(t * 1.7) + (Math.random() - 0.5) * 0.1;
+            emitSplat(0.5, 0.06, Math.cos(a) * 1600 * F, Math.sin(a) * 1600 * F, colorAt(t * 0.04), 0.9);
+            break;
+        }
+        case 'Waterfall': {
+            for (let k = 0; k < 5; k++) {
+                const x = 0.2 + 0.15 * k + 0.02 * Math.sin(t * 1.3 + k * 2.1);
+                emitSplat(x, 0.96, Math.sin(t * 2 + k) * 80 * F, -500 * F, colorAt(k / 5 + t * 0.02), 0.6);
+            }
+            break;
+        }
+        case 'Waves': {
+            // A pen tracing a traveling sine wave across the screen
+            const x = (t * 0.18) % 1;
+            const y = 0.5 + 0.18 * Math.sin(x * Math.PI * 4 + t);
+            if (modeState.prev[0] && x < modeState.prev[0].x) modeState.prev[0] = null;   // wrapped around
+            trackedEmit(0, x, y, colorAt(x + t * 0.02), 0.8, 3);
+            break;
+        }
+        case 'Orbit': {
+            // Bodies on circular orbits; inner ones move faster, like planets
+            const radii = [0.12, 0.22, 0.32, 0.42];
+            radii.forEach((r0, k) => {
+                const r = r0 * mind;
+                const w = 1.6 / Math.pow(r0 / 0.12, 1.5);
+                const a = t * w + k * 1.7;
+                const [x, y] = centeredToUV(Math.cos(a) * r, Math.sin(a) * r);
+                trackedEmit(k, x, y, colorAt(k / 4), 0.6, 3);
+            });
+            if (modeState.timer <= 0) {
+                modeState.timer = 0.3;
+                emitSplat(0.5, 0.5, 0, 0, colorAt(0.1), 1.5);
+            }
+            break;
+        }
+        case 'Magnetic': {
+            // Color streams out of both poles and follows the field lines
+            const poles = [0.5 - 0.22, 0.5 + 0.22];
+            poles.forEach((px, k) => {
+                const a = t * 2 + k * Math.PI;
+                emitSplat(px, 0.5, Math.cos(a) * 500 * F, Math.sin(a) * 500 * F, colorAt(k * 0.5), 0.7);
+            });
+            break;
+        }
+        case 'Plasma': {
+            // Short crackling arcs at random spots
+            if (Math.random() < 6 * sdt) {
+                let x = 0.15 + Math.random() * 0.7, y = 0.15 + Math.random() * 0.7;
+                let a = Math.random() * Math.PI * 2;
+                const color = colorAt(Math.random());
+                for (let i = 0; i < 5; i++) {
+                    a += (Math.random() - 0.5) * 1.6;
+                    const step = 0.025;
+                    x += Math.cos(a) * step / ar;
+                    y += Math.sin(a) * step;
+                    emitSplat(x, y, Math.cos(a) * 900 * F, Math.sin(a) * 900 * F, color, 2);
+                }
+            }
+            break;
+        }
+        case 'Galaxy': {
+            // Two spiral arms wound around a bright core
+            for (let k = 0; k < 2; k++) {
+                const phase = (t * 0.25 + k * 0.5) % 1;
+                const r = (0.05 + 0.35 * phase) * mind;
+                const a = t * 0.6 + Math.PI * k + r * 4 / mind;
+                const [x, y] = centeredToUV(Math.cos(a) * r, Math.sin(a) * r);
+                emitSplat(x, y, -Math.sin(a) * 350 * F + Math.cos(a) * 120 * F, Math.cos(a) * 350 * F + Math.sin(a) * 120 * F,
+                          colorAt(k * 0.5 + phase * 0.3), 0.7);
+            }
+            if (modeState.timer <= 0) {
+                modeState.timer = 0.3;
+                emitSplat(0.5, 0.5, 0, 0, colorAt(0.15), 1.2);
+            }
+            break;
+        }
+        case 'Black Hole': {
+            // Clouds fall in from the edges and vanish at the event horizon
+            if (modeState.timer <= 0) {
+                modeState.timer = 0.4;
+                const a = Math.random() * Math.PI * 2;
+                const r = 0.45 * mind;
+                const [x, y] = centeredToUV(Math.cos(a) * r, Math.sin(a) * r);
+                emitSplat(x, y, -Math.sin(a) * 900 * F, Math.cos(a) * 900 * F, colorAt(Math.random()), 3);
+            }
+            pointEffect(0.5, 0.5, { fade: Math.min(1, 6 * sdt), velocityFade: Math.min(1, 2 * sdt), area: 1.2 });
+            break;
+        }
+    }
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -1787,6 +1993,10 @@ function startGUI () {
     } }, 'fun').name('Random splats');
 
     let simFolder = gui.addFolder('Simulation');
+    simFolder.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').listen().onChange(v => {
+        applySimMode(v);
+        showToast('Mode · ' + v);
+    });
     simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
     addPct(simFolder, 'SPEED', 'speed');
     simFolder.add(config, 'AUTOPLAY').name('autoplay').listen();
@@ -3497,6 +3707,7 @@ function update () {
     applyInputs(dt);
     updateAutoplay(dt);
     updateVortex(dt);
+    updateSimMode(dt);
     applyRandomness(dt);
     if (!config.PAUSED) {
         const simDt = dt * config.SPEED;
@@ -4015,6 +4226,7 @@ window.addEventListener('keydown', e => {
         case 'KeyJ': cycleSetting('INJECTION', INJECTION_MODES, 'Injection'); break;
         case 'KeyX': cycleSetting('FORCE_FIELD', FORCE_FIELDS, 'Force field'); break;
         case 'KeyO': toggleMode('PARTICLES', 'Particles'); break;
+        case 'KeyQ': cycleSimMode(); break;
         case 'KeyL': cycleSetting('PARTICLE_STYLE', PARTICLE_STYLES, 'Particle style'); break;
         default: return;
     }

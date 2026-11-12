@@ -29,12 +29,14 @@ The toolbar at the bottom gives one-tap access to **Randomize**, **Palette**, **
 | Random color on touch | Each new touch injects a burst of random colors | I |
 | Auto transitions | Smoothly crossfades to the next palette every few seconds | |
 
-Space adds random splats, H hides the toolbar and panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles and L cycles the particle style.
+Space adds random splats, H hides the toolbar and panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles, L cycles the particle style and Q cycles the simulation mode.
 
 ## Settings
 
 Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value. The panel is grouped like this:
 
+- **Simulation → simulation mode:** one-tap scenes built from the forces below. Each sets its own forces, fields and edges, and most keep the scene moving on their own:
+  - **Standard Fluid** (resets those forces), **Vortex**, **Whirlpool** (color pours in at the rim and drains in the middle), **Tornado** (a rising, twisting column), **Explosion** (periodic bursts), **Fountain** (a jet that arcs and falls), **Waterfall** (falls off the top and out the bottom), **Waves** (a traveling sine ribbon), **Orbit** (planets on Kepler-style orbits), **Magnetic** (color streams along field lines between two poles), **Plasma** (crackling arcs in turbulence), **Galaxy** (two spiral arms around a bright core), **Black Hole** (clouds spiral in and vanish), **Reverse Flow** (fluid moves against your finger)
 - **Simulation:** quality (Very Low → Ultra High), speed, autoplay, radius, sim resolution, dissipation (fade time), viscosity, vorticity, gravity, pressure (Low / Norm / Max)
 - **Forces:** turbulence (animated curl noise), flow strength, swirl, pressure strength, buoyancy (50% = neutral, lower sinks, higher rises), drag, elasticity (springy wobble), flow direction (8 directions, radial outward/inward, circular), flow speed, randomness
 - **Edges:** Wall, Wrap (fluid leaving one side comes back on the other; needs WebGL2), Void (fluid flows out and vanishes), Repel; plus repel strength, repel distance, edge friction, edge bounce, edge softness, and corner behavior (Normal, Rounded, Repel, Bounce, Absorb, Wrap)
