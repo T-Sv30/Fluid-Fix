@@ -87,8 +87,12 @@
                 scrollbar-color: rgba(139, 92, 246, 0.5) transparent;
             }
 
+            /* Collapsed: a small pill centered at the top of the screen */
             html body .dg.main.a.ff-collapsed {
+                float: none;
+                display: table;   /* shrink to its content so auto margins can center it */
                 width: auto !important;
+                margin: 10px auto 0;
                 overflow: hidden;
             }
 
@@ -720,7 +724,7 @@
             .toast {
                 position: fixed;
                 left: 50%;
-                top: calc(18px + env(safe-area-inset-top, 0px));
+                top: calc(68px + env(safe-area-inset-top, 0px));
                 transform: translate(-50%, -8px);
                 z-index: 6;
                 max-width: calc(100vw - 32px);
@@ -905,6 +909,6 @@
         </div>
 
 
-        <script src="./script.js?v=2026-11-12c"></script>
+        <script src="./script.js?v=2026-11-12d"></script>
     </body>
 </html>
