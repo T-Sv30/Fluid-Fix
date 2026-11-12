@@ -43,16 +43,676 @@
                 height: 100%;
             }
 
-            .dg {
-                opacity: 0.9;
+            /* ---------- Control panel theme ---------- */
+
+            :root {
+                --ff-glass: rgba(11, 11, 19, 0.74);
+                --ff-glass-solid: rgba(13, 13, 22, 0.94);
+                --ff-line: rgba(255, 255, 255, 0.07);
+                --ff-text: #ecebf5;
+                --ff-dim: rgba(236, 235, 245, 0.6);
+                --ff-violet: #8b5cf6;
+                --ff-cyan: #22d3ee;
+                --ff-pink: #f472b6;
+                --ff-grad: linear-gradient(90deg, #8b5cf6, #22d3ee 50%, #f472b6);
+                --ff-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+                --ff-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Roboto Mono", monospace;
             }
 
-            .dg .property-name {
+            html body .dg.ac {
+                top: env(safe-area-inset-top, 0px);
+                right: env(safe-area-inset-right, 0px);
+                z-index: 5;
+            }
+
+            html body .dg.main.a {
+                position: relative;
+                margin: 10px 10px 0 0;
+                width: min(344px, calc(100vw - 20px)) !important;
+                max-height: calc(100vh - 20px - env(safe-area-inset-top, 0px));
+                overflow-x: hidden;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                border-radius: 18px;
+                background: var(--ff-glass);
+                -webkit-backdrop-filter: blur(22px) saturate(170%);
+                backdrop-filter: blur(22px) saturate(170%);
+                border: 1px solid rgba(255, 255, 255, 0.09);
+                box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(139, 92, 246, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+                color: var(--ff-text);
+                font: 500 12.5px/1.2 var(--ff-font);
+                text-shadow: none;
+                transition: width 0.25s ease;
+                scrollbar-width: thin;
+                scrollbar-color: rgba(139, 92, 246, 0.5) transparent;
+            }
+
+            html body .dg.main.a.ff-collapsed {
+                width: auto !important;
+                overflow: hidden;
+            }
+
+            html body .dg.main::-webkit-scrollbar {
+                width: 6px;
+                background: transparent;
+            }
+
+            html body .dg.main::-webkit-scrollbar-thumb {
+                border-radius: 6px;
+                background: linear-gradient(#8b5cf6, #22d3ee);
+            }
+
+            html body .dg .close-button {
+                display: none !important;
+            }
+
+            html body .dg ul {
+                background: transparent;
+            }
+
+            /* Header */
+
+            .ff-header {
+                position: sticky;
+                top: 0;
+                z-index: 3;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                width: 100%;
+                padding: 12px 14px;
+                box-sizing: border-box;
+                border: 0;
+                background: var(--ff-glass-solid);
+                color: inherit;
+                font: inherit;
+                text-align: left;
+                cursor: pointer;
+                -webkit-tap-highlight-color: transparent;
+            }
+
+            .ff-header::after {
+                content: '';
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                height: 1px;
+                background: var(--ff-grad);
+                background-size: 200% 100%;
+                opacity: 0.75;
+                animation: ff-flow 6s linear infinite;
+            }
+
+            .ff-header:focus-visible {
+                outline: 2px solid var(--ff-cyan);
+                outline-offset: -2px;
+            }
+
+            .ff-logo {
+                flex: none;
+                display: grid;
+                place-items: center;
+                width: 30px;
+                height: 30px;
+                border-radius: 10px;
+                background: var(--ff-grad);
+                background-size: 200% 100%;
+                box-shadow: 0 0 18px rgba(139, 92, 246, 0.55);
+                animation: ff-flow 6s linear infinite;
+            }
+
+            .ff-logo svg {
+                width: 17px;
+                height: 17px;
+                fill: none;
+                stroke: #fff;
+                stroke-width: 2;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            .ff-titles {
+                flex: 1;
+                min-width: 0;
+            }
+
+            .ff-title {
+                display: block;
+                font: 800 13px/1 var(--ff-font);
+                letter-spacing: 0.32em;
+                background: var(--ff-grad);
+                background-size: 200% 100%;
+                -webkit-background-clip: text;
+                background-clip: text;
+                color: transparent;
+                animation: ff-flow 6s linear infinite;
+            }
+
+            .ff-sub {
+                display: block;
+                margin-top: 5px;
+                overflow: hidden;
+                color: var(--ff-dim);
+                font-size: 10.5px;
+                letter-spacing: 0.04em;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+
+            .ff-fps {
+                flex: none;
+                padding: 3px 8px;
+                border-radius: 999px;
+                border: 1px solid rgba(34, 211, 238, 0.28);
+                background: rgba(34, 211, 238, 0.08);
+                color: var(--ff-cyan);
+                font: 600 10.5px/1.2 var(--ff-mono);
+            }
+
+            .ff-chev {
+                flex: none;
+                width: 8px;
+                height: 8px;
+                margin: 0 4px 3px 2px;
+                border-right: 2px solid var(--ff-dim);
+                border-bottom: 2px solid var(--ff-dim);
+                transform: rotate(45deg);
+                transition: transform 0.25s ease;
+            }
+
+            .ff-collapsed .ff-chev {
+                transform: rotate(-135deg);
+                margin-bottom: -3px;
+            }
+
+            .ff-collapsed .ff-sub,
+            .ff-collapsed .ff-fps {
+                display: none;
+            }
+
+            .ff-collapsed .ff-header {
+                padding: 9px 12px;
+            }
+
+            .ff-collapsed .ff-header::after {
+                display: none;
+            }
+
+            /* Quick actions */
+
+            .ff-quick {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 6px;
+                padding: 12px;
+                border-bottom: 1px solid var(--ff-line);
+            }
+
+            .ff-collapsed .ff-quick {
+                display: none;
+            }
+
+            .ff-q {
+                appearance: none;
+                -webkit-appearance: none;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 5px;
+                min-width: 0;
+                height: 56px;
+                margin: 0;
+                padding: 0 2px;
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 13px;
+                background: rgba(255, 255, 255, 0.04);
+                color: var(--ff-text);
+                font: 600 10px/1 var(--ff-font);
+                letter-spacing: 0.03em;
+                cursor: pointer;
+                -webkit-tap-highlight-color: transparent;
+                transition: transform 0.12s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+            }
+
+            .ff-q span {
+                max-width: 100%;
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+
+            .ff-q svg {
+                width: 20px;
+                height: 20px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1.8;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            .ff-q:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border-color: rgba(34, 211, 238, 0.35);
+                box-shadow: 0 0 16px rgba(34, 211, 238, 0.16);
+            }
+
+            .ff-q:active {
+                transform: scale(0.93);
+            }
+
+            .ff-q:focus-visible {
+                outline: 2px solid var(--ff-cyan);
+                outline-offset: 1px;
+            }
+
+            .ff-q.on {
+                border-color: transparent;
+                background: linear-gradient(135deg, rgba(139, 92, 246, 0.75), rgba(34, 211, 238, 0.6));
+                box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+                color: #fff;
+            }
+
+            /* Rows */
+
+            html body .dg li:not(.folder) {
+                height: 36px;
+                line-height: 36px;
+                padding: 0 12px 0 16px;
+                background: transparent;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+            }
+
+            html body .dg .cr {
+                border-left: 0 !important;
+                transition: background 0.15s ease;
+            }
+
+            html body .dg .cr:hover {
+                background: rgba(255, 255, 255, 0.035);
+            }
+
+            html body .dg .property-name {
+                width: 44%;
+                overflow: hidden;
+                color: var(--ff-dim);
+                font-weight: 500;
+                letter-spacing: 0.01em;
+                text-overflow: ellipsis;
+            }
+
+            html body .dg .c {
+                width: 56%;
+            }
+
+            /* Text and number boxes */
+
+            html body .dg .c input[type=text] {
+                box-sizing: border-box;
+                height: 24px;
+                margin-top: 6px;
+                padding: 0 7px;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.06);
+                color: var(--ff-text);
+                font: 500 11.5px/22px var(--ff-mono);
+                text-align: right;
+                outline: none;
+                transition: border-color 0.15s ease, box-shadow 0.15s ease;
+            }
+
+            html body .dg .cr.string input[type=text] {
+                text-align: left;
+                font-family: var(--ff-font);
+                font-size: 12px;
+            }
+
+            html body .dg .c input[type=text]:hover {
+                background: rgba(255, 255, 255, 0.09);
+            }
+
+            html body .dg .c input[type=text]:focus {
+                border-color: rgba(34, 211, 238, 0.7);
+                box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+                background: rgba(0, 0, 0, 0.35);
+                color: #fff;
+            }
+
+            /* Sliders */
+
+            html body .dg .has-slider input[type=text] {
+                width: 30%;
+            }
+
+            html body .dg .c .slider {
+                position: relative;
+                width: 62%;
+                height: 6px;
+                margin: 15px 8% 0 0;
                 overflow: visible;
+                border-radius: 6px;
+                background: rgba(255, 255, 255, 0.1);
+                cursor: ew-resize;
+                touch-action: none;
             }
 
-            .dg.main .close-button {
-                border-radius: 0 0 8px 8px;
+            html body .dg .c .slider::before {
+                content: '';
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: -12px;
+                bottom: -12px;   /* larger touch target */
+            }
+
+            html body .dg .c .slider-fg {
+                position: relative;
+                border-radius: 6px;
+                background: var(--ff-grad);
+                background-size: 220px 100%;
+                box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+            }
+
+            html body .dg .c .slider-fg::after {
+                content: '';
+                position: absolute;
+                top: 50%;
+                right: -7px;
+                width: 14px;
+                height: 14px;
+                margin-top: -7px;
+                border-radius: 50%;
+                background: #fff;
+                box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.4), 0 0 12px rgba(34, 211, 238, 0.8);
+                transition: transform 0.15s ease;
+            }
+
+            html body .dg .c .slider:hover {
+                background: rgba(255, 255, 255, 0.14);
+            }
+
+            html body .dg .c .slider:hover .slider-fg {
+                background: var(--ff-grad);
+                background-size: 220px 100%;
+            }
+
+            html body .dg .c .slider:hover .slider-fg::after {
+                transform: scale(1.15);
+            }
+
+            /* Switches */
+
+            html body .dg .c input[type=checkbox] {
+                -webkit-appearance: none;
+                appearance: none;
+                position: relative;
+                width: 38px;
+                height: 22px;
+                margin: 7px 0 0;
+                border-radius: 22px;
+                background: rgba(255, 255, 255, 0.12);
+                vertical-align: top;
+                cursor: pointer;
+                outline: none;
+                transition: background 0.2s ease, box-shadow 0.2s ease;
+            }
+
+            html body .dg .c input[type=checkbox]::after {
+                content: '';
+                position: absolute;
+                top: 3px;
+                left: 3px;
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                background: #d9d8e4;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+                transition: transform 0.2s ease, background 0.2s ease;
+            }
+
+            html body .dg .c input[type=checkbox]:checked {
+                background: var(--ff-grad);
+                box-shadow: 0 0 14px rgba(34, 211, 238, 0.45);
+            }
+
+            html body .dg .c input[type=checkbox]:checked::after {
+                transform: translateX(16px);
+                background: #fff;
+            }
+
+            html body .dg .c input[type=checkbox]:focus-visible {
+                box-shadow: 0 0 0 2px var(--ff-cyan);
+            }
+
+            /* Dropdowns */
+
+            html body .dg .c select {
+                -webkit-appearance: none;
+                appearance: none;
+                width: 100%;
+                height: 26px;
+                margin-top: 5px;
+                padding: 0 26px 0 10px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.06) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2322d3ee' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center / 10px 6px;
+                color: var(--ff-text);
+                font: 500 12px var(--ff-font);
+                outline: none;
+                cursor: pointer;
+            }
+
+            html body .dg .c select:hover {
+                background-color: rgba(255, 255, 255, 0.09);
+            }
+
+            html body .dg .c select:focus {
+                border-color: rgba(34, 211, 238, 0.7);
+                box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+            }
+
+            html body .dg .c select option {
+                background: #15151f;
+                color: #fff;
+            }
+
+            /* Buttons (actions inside folders) */
+
+            html body .dg .cr.function {
+                position: relative;
+            }
+
+            html body .dg .cr.function .property-name {
+                width: 100%;
+                color: var(--ff-text);
+                font-weight: 600;
+            }
+
+            html body .dg .cr.function::after {
+                content: '';
+                position: absolute;
+                right: 16px;
+                top: 50%;
+                width: 6px;
+                height: 6px;
+                margin-top: -3px;
+                border-top: 2px solid var(--ff-cyan);
+                border-right: 2px solid var(--ff-cyan);
+                transform: rotate(45deg);
+                opacity: 0.55;
+                transition: transform 0.15s ease, opacity 0.15s ease;
+            }
+
+            html body .dg .cr.function:hover {
+                background: linear-gradient(90deg, rgba(139, 92, 246, 0.16), rgba(34, 211, 238, 0.06));
+            }
+
+            html body .dg .cr.function:hover::after {
+                opacity: 1;
+                transform: translateX(3px) rotate(45deg);
+            }
+
+            html body .dg .cr.function.ff-danger .property-name {
+                color: #ff8a9a;
+            }
+
+            /* Color pickers */
+
+            html body .dg .cr.color .c input[type=text] {
+                text-align: center;
+                border-radius: 8px;
+            }
+
+            html body .dg .selector {
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            }
+
+            /* Sections */
+
+            html body .dg li.folder {
+                border-left: 0;
+            }
+
+            html body .dg li.title {
+                position: relative;
+                height: 42px;
+                margin: 0;
+                padding: 0 34px 0 46px;
+                border-bottom: 1px solid var(--ff-line);
+                background: none !important;
+                color: var(--ff-text);
+                font: 700 11px/42px var(--ff-font);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                transition: background 0.15s ease, color 0.15s ease;
+            }
+
+            html body .dg li.title:hover {
+                background: rgba(255, 255, 255, 0.035) !important;
+            }
+
+            html body .dg li.title::after {
+                content: '';
+                position: absolute;
+                right: 18px;
+                top: 50%;
+                width: 6px;
+                height: 6px;
+                margin-top: -5px;
+                border-right: 2px solid var(--ff-dim);
+                border-bottom: 2px solid var(--ff-dim);
+                transform: rotate(45deg);
+                transition: transform 0.2s ease;
+            }
+
+            html body .dg ul.closed > li.title::after {
+                margin-top: -3px;
+                transform: rotate(-45deg);
+            }
+
+            html body .dg ul:not(.closed) > li.title::before {
+                content: '';
+                position: absolute;
+                left: 0;
+                top: 9px;
+                bottom: 9px;
+                width: 3px;
+                border-radius: 0 3px 3px 0;
+                background: linear-gradient(#8b5cf6, #22d3ee);
+                box-shadow: 0 0 10px rgba(34, 211, 238, 0.6);
+            }
+
+            .ff-ico {
+                position: absolute;
+                left: 16px;
+                top: 50%;
+                width: 18px;
+                height: 18px;
+                margin-top: -9px;
+                color: var(--ff-dim);
+                transition: color 0.2s ease, filter 0.2s ease;
+            }
+
+            .ff-ico svg {
+                display: block;
+                width: 18px;
+                height: 18px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1.8;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            html body .dg ul:not(.closed) > li.title .ff-ico {
+                color: var(--ff-cyan);
+                filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.6));
+            }
+
+            /* Sub-sections (one level in) */
+
+            html body .dg li.folder li.folder li.title {
+                height: 36px;
+                padding-left: 52px;
+                background: rgba(255, 255, 255, 0.025) !important;
+                color: var(--ff-dim);
+                font-size: 10.5px;
+                line-height: 36px;
+                letter-spacing: 0.13em;
+            }
+
+            html body .dg li.folder li.folder ul:not(.closed) > li.title {
+                color: var(--ff-text);
+            }
+
+            html body .dg li.folder li.folder li.title .ff-ico {
+                left: 24px;
+                width: 16px;
+                height: 16px;
+                margin-top: -8px;
+            }
+
+            html body .dg li.folder li.folder li.title .ff-ico svg {
+                width: 16px;
+                height: 16px;
+            }
+
+            html body .dg li.folder li.folder ul:not(.closed) > li.title::before {
+                left: 8px;
+            }
+
+            html body .dg li.folder li.folder li:not(.folder):not(.title) {
+                padding-left: 24px;
+            }
+
+            /* Collapsed sections hide everything inside them (must outrank the row sizes above) */
+            html body .dg .closed li:not(.title),
+            html body .dg .closed ul li,
+            html body .dg .closed ul li > * {
+                height: 0 !important;
+                min-height: 0 !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+                border: 0 !important;
+                overflow: hidden;
+            }
+
+            @keyframes ff-flow {
+                from { background-position: 0% 0; }
+                to { background-position: 200% 0; }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                .ff-header::after,
+                .ff-logo,
+                .ff-title {
+                    animation: none;
+                }
             }
 
             /* Toast */
@@ -248,6 +908,6 @@
         </div>
 
 
-        <script src="./script.js?v=2026-11-12b"></script>
+        <script src="./script.js?v=2026-11-12c"></script>
     </body>
 </html>

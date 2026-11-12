@@ -587,15 +587,6 @@ function showToast (text) {
     toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
 }
 
-let freezeController = null;
-let freezeShown = null;
-
-// Keeps the Freeze button label in step with the current state
-function syncTopMenu () {
-    if (!freezeController || freezeShown === config.PAUSED) return;
-    freezeShown = config.PAUSED;
-    freezeController.name(config.PAUSED ? '▶ Resume' : '❄ Freeze');
-}
 
 function pointerPrototype () {
     this.id = -1;
@@ -2895,6 +2886,154 @@ function applyBackgroundBlur () {
     blur(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
 }
 
+// ---------- Control panel ----------
+
+const ICONS = {
+    logo:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5',
+    sparkle:   'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+    pause:     'M8 5v14 M16 5v14',
+    play:      'M7 4.5l12 7.5-12 7.5z',
+    clear:     'M4 15l8.5-8.5 6 6L13 18H7z M10 9l6 6 M13 21h7',
+    drop:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
+    palette:   'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.4-1.9-.3-1 .3-2.1 1.4-2.1H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z M7.5 11h.01 M10.5 7h.01 M15.5 7.5h.01',
+    wave:      'M3 12c2.5-5 5.5-5 8 0s5.5 5 8 0 M3 17c2.5-3 5.5-3 8 0s5.5 3 8 0 M3 7c2.5-3 5.5-3 8 0s5.5 3 8 0',
+    vortex:    'M12 12a1.5 1.5 0 1 1 1.5 1.5 M13.5 13.5A4 4 0 1 1 16 9 M16 9a7 7 0 1 1-9.5 9',
+    particles: 'M5 7h.01 M12 4.5h.01 M19 8h.01 M8 13h.01 M15 12h.01 M19 17h.01 M11 19h.01 M4 18h.01',
+    undo:      'M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
+    redo:      'M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
+    camera:    'M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
+    expand:    'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+    presets:   'M6 4h12v17l-6-4-6 4z',
+    scene:     'M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M3 12c0-3 4-5.5 9-5.5s9 2.5 9 5.5-4 5.5-9 5.5S3 15 3 12z M12 3v2 M12 19v2',
+    touch:     'M9 11V5a1.5 1.5 0 0 1 3 0v6 M12 10V8.5a1.5 1.5 0 0 1 3 0V11 M15 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-4.8-2.4L4 15a1.5 1.5 0 0 1 2.3-1.9L9 15',
+    look:      'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+    light:     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M12 2v2 M12 20v2 M2 12h2 M20 12h2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4',
+    bulb:      'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z',
+    filters:   'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 3l3 7 M21 12l-7 1 M12 21l-3-7 M3 12l7-1',
+    layers:    'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
+    physics:   'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
+    fluid:     'M3 10c2.5-4 5.5-4 8 0s5.5 4 8 0 M3 16c2.5-4 5.5-4 8 0s5.5 4 8 0',
+    forces:    'M3 8h11a3 3 0 1 0-3-3 M3 12h15a3 3 0 1 1-3 3 M3 16h7',
+    edges:     'M4 4h16v16H4z M8 8h8v8H8z',
+    text:      'M5 6V4h14v2 M12 4v16 M9 20h6',
+    system:    'M4 7h10 M18 7h2 M4 17h4 M12 17h8 M14 5v4 M8 15v4',
+    gauge:     'M4 17a8 8 0 1 1 16 0 M12 17l4-5',
+};
+
+function svgIcon (name) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ICONS[name] + '"/></svg>';
+}
+
+const QUICK_ACTIONS = [
+    { id: 'random',    label: 'Random',    title: 'Randomize the look (R)',     icon: 'sparkle', run: randomizeConfig },
+    { id: 'freeze',    label: 'Freeze',    title: 'Freeze / resume (F)',        icon: 'pause',   run: toggleFreeze, on: () => config.PAUSED },
+    { id: 'splash',    label: 'Splash',    title: 'Random splashes (Space)',    icon: 'drop',    run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
+    { id: 'clear',     label: 'Clear',     title: 'Clear the fluid',            icon: 'clear',   run: () => { clearFluid(); showToast('Cleared'); } },
+    { id: 'palette',   label: 'Palette',   title: 'Next palette (C)',           icon: 'palette', run: cyclePalette },
+    { id: 'autoplay',  label: 'Auto-play', title: 'Auto-play (A)',              icon: 'wave',    run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
+    { id: 'vortex',    label: 'Vortex',    title: 'Vortex (V)',                 icon: 'vortex',  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
+    { id: 'particles', label: 'Particles', title: 'Particles (O)',              icon: 'particles', run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
+    { id: 'undo',      label: 'Undo',      title: 'Undo (Ctrl+Z)',              icon: 'undo',    run: undo },
+    { id: 'redo',      label: 'Redo',      title: 'Redo (Ctrl+Shift+Z)',        icon: 'redo',    run: redo },
+    { id: 'shot',      label: 'Capture',   title: 'Save a screenshot',          icon: 'camera',  run: captureScreenshot },
+    { id: 'full',      label: 'Fullscreen', title: 'Fullscreen',                icon: 'expand',  run: toggleFullscreen },
+];
+
+const panel = { header: null, sub: null, fps: null, quick: {}, shown: {} };
+
+function setPanelOpen (open) {
+    if (!guiRoot) return;
+    if (open) guiRoot.open(); else guiRoot.close();
+    if (guiRoot.domElement && guiRoot.domElement.classList) guiRoot.domElement.classList.toggle('ff-collapsed', !open);
+    if (panel.header) panel.header.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) refreshGUI();
+}
+
+// Header (brand, current preset, live fps) and the quick-action grid sit above the sections
+function buildPanelChrome (gui) {
+    const root = gui.domElement;
+    if (!root || !root.insertBefore || !document.createElement) return;
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'ff-header';
+    header.setAttribute('aria-label', 'Show or hide the controls');
+    header.innerHTML =
+        '<span class="ff-logo">' + svgIcon('logo') + '</span>' +
+        '<span class="ff-titles"><span class="ff-title">FLUID FIX</span><span class="ff-sub"></span></span>' +
+        '<span class="ff-fps" aria-hidden="true"></span>' +
+        '<span class="ff-chev" aria-hidden="true"></span>';
+    header.addEventListener('click', () => setPanelOpen(gui.closed));
+
+    const quick = document.createElement('div');
+    quick.className = 'ff-quick';
+    quick.setAttribute('role', 'toolbar');
+    quick.setAttribute('aria-label', 'Quick actions');
+    QUICK_ACTIONS.forEach(a => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ff-q';
+        b.title = a.title;
+        b.setAttribute('aria-label', a.title);
+        if (a.on) b.setAttribute('aria-pressed', 'false');
+        b.innerHTML = svgIcon(a.icon) + '<span>' + a.label + '</span>';
+        b.addEventListener('click', () => {
+            a.run();
+            refreshGUI();
+            syncTopMenu(true);
+        });
+        quick.appendChild(b);
+        panel.quick[a.id] = b;
+    });
+
+    root.insertBefore(quick, root.firstChild);
+    root.insertBefore(header, root.firstChild);
+    panel.header = header;
+    panel.sub = header.querySelector('.ff-sub');
+    panel.fps = header.querySelector('.ff-fps');
+}
+
+// Adds an icon to a section title
+function decorateFolder (folder, icon) {
+    const ul = folder.__ul;
+    const title = ul && ul.querySelector && ul.querySelector('li.title');
+    if (!title || !document.createElement) return folder;
+    const span = document.createElement('span');
+    span.className = 'ff-ico';
+    span.innerHTML = svgIcon(icon);
+    title.insertBefore(span, title.firstChild);
+    return folder;
+}
+
+function section (parent, name, icon) {
+    return decorateFolder(parent.addFolder(name), icon);
+}
+
+// Keeps the header and the quick-action buttons in step with the app
+function syncTopMenu (force) {
+    if (!panel.header) return;
+    QUICK_ACTIONS.forEach(a => {
+        if (!a.on) return;
+        const on = !!a.on();
+        if (!force && panel.shown[a.id] === on) return;
+        panel.shown[a.id] = on;
+        const b = panel.quick[a.id];
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (a.id === 'freeze') b.innerHTML = svgIcon(on ? 'play' : 'pause') + '<span>' + (on ? 'Resume' : 'Freeze') + '</span>';
+    });
+    const sub = presetState.current + ' · ' + config.SIM_MODE;
+    if (panel.shown.sub !== sub) {
+        panel.shown.sub = sub;
+        panel.sub.textContent = sub;
+    }
+    const fps = perf.fps + ' fps';
+    if (panel.shown.fps !== fps) {
+        panel.shown.fps = fps;
+        panel.fps.textContent = fps;
+    }
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -3001,225 +3140,228 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
 }
 
 function startGUI () {
-    var gui = new dat.GUI({ width: 310 });
+    var gui = new dat.GUI({ width: 344, hideable: false });
     guiRoot = gui;
+    buildPanelChrome(gui);
 
-    gui.add({ fun: randomizeConfig }, 'fun').name('✨ Randomize');
-    freezeController = gui.add({ fun: () => { toggleFreeze(); } }, 'fun').name('❄ Freeze');
-    gui.add({ fun: cyclePalette }, 'fun').name('🎨 Next palette');
-    gui.add(config, 'AUTOPLAY').name('auto-play');
-    gui.add(config, 'VORTEX').name('vortex');
-    gui.add({ fun: () => {
-        splatStack.push(parseInt(Math.random() * 20) + 5);
-    } }, 'fun').name('Random splats');
-    gui.add({ fun: () => { clearFluid(); showToast('Cleared'); } }, 'fun').name('🧽 Clear fluid');
-    gui.add({ fun: undo }, 'fun').name('↶ Undo');
-    gui.add({ fun: redo }, 'fun').name('↷ Redo');
-    gui.add({ fun: captureScreenshot }, 'fun').name('📷 Screenshot');
-    gui.add({ fun: toggleFullscreen }, 'fun').name('⛶ Fullscreen');
+    // Presets
+    let presets = section(gui, 'Presets', 'presets');
+    presetCtrl = presets.add(ui7, 'preset', presetNames()).name('preset').onChange(v => selectPreset(v, true));
+    presets.add(ui7, 'presetName').name('name').onFinishChange(presetRename);
+    presets.add({ fun: presetSave }, 'fun').name('Save preset');
+    presets.add({ fun: presetNew }, 'fun').name('New preset');
+    presets.add({ fun: presetClone }, 'fun').name('Duplicate');
+    presets.add({ fun: presetExport }, 'fun').name('Export / share');
+    presets.add({ fun: presetImport }, 'fun').name('Load from file or text');
+    let del = presets.add({ fun: presetDelete }, 'fun').name('Delete preset');
+    if (del.__li && del.__li.classList) del.__li.classList.add('ff-danger');
+    let reset = presets.add({ fun: resetSimulation }, 'fun').name('Reset everything');
+    if (reset.__li && reset.__li.classList) reset.__li.classList.add('ff-danger');
 
-    let presetsFolder = gui.addFolder('Presets');
-    presetCtrl = presetsFolder.add(ui7, 'preset', presetNames()).name('preset').onChange(v => selectPreset(v, true));
-    presetsFolder.add(ui7, 'presetName').name('preset name').onFinishChange(presetRename);
-    presetsFolder.add({ fun: presetSave }, 'fun').name('💾 Save preset');
-    presetsFolder.add({ fun: presetNew }, 'fun').name('＋ New');
-    presetsFolder.add({ fun: presetClone }, 'fun').name('⧉ Clone');
-    presetsFolder.add({ fun: randomizeConfig }, 'fun').name('🎲 Random');
-    presetsFolder.add({ fun: presetExport }, 'fun').name('📤 Export');
-    presetsFolder.add({ fun: presetImport }, 'fun').name('📂 Load preset…');
-    presetsFolder.add({ fun: presetDelete }, 'fun').name('🗑 Delete');
-    presetsFolder.add({ fun: resetSimulation }, 'fun').name('↺ Reset simulation');
-
-    let simFolder = gui.addFolder('Simulation');
-    simFolder.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').onChange(v => {
+    // Scene: what is happening on screen
+    let scene = section(gui, 'Scene', 'scene');
+    scene.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').onChange(v => {
         applySimMode(v);
         showToast('Mode · ' + v);
     });
-    simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
-    addPct(simFolder, 'SPEED', 'speed');
-    simFolder.add(config, 'AUTOPLAY').name('autoplay');
-    addPct(simFolder, 'RADIUS', 'radius');
-    simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    addPct(simFolder, 'DISSIPATION', 'dissipation');
-    simFolder.add(config, 'VISCOSITY', 0, 100).step(1).name('viscosity');
-    addPct(simFolder, 'VORTICITY', 'vorticity');
-    simFolder.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
-    simFolder.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure');
-    simFolder.add(config, 'PAUSED').name('paused');
-
-    let forcesFolder = gui.addFolder('Forces');
-    forcesFolder.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
-    forcesFolder.add(config, 'FLOW_STRENGTH', 0, 100).step(1).name('flow strength');
-    forcesFolder.add(config, 'SWIRL', 0, 100).step(1).name('swirl');
-    addPct(forcesFolder, 'PRESSURE_STR', 'pressure strength');
-    forcesFolder.add(config, 'BUOYANCY', 0, 100).step(1).name('buoyancy (50 = none)');
-    addPct(forcesFolder, 'DRAG', 'drag');
-    forcesFolder.add(config, 'ELASTICITY', 0, 100).step(1).name('elasticity');
-    forcesFolder.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
-    forcesFolder.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
-    forcesFolder.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
-    forcesFolder.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field');
-    forcesFolder.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
-
-    let edgeFolder = gui.addFolder('Edges');
-    edgeFolder.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
-    edgeFolder.add(config, 'REPEL_STRENGTH', 0, 100).step(1).name('repel strength');
-    edgeFolder.add(config, 'REPEL_DISTANCE', 0, 100).step(1).name('repel distance');
-    edgeFolder.add(config, 'EDGE_FRICTION', 0, 100).step(1).name('edge friction');
-    edgeFolder.add(config, 'EDGE_BOUNCE', 0, 100).step(1).name('edge bounce');
-    edgeFolder.add(config, 'EDGE_SOFTNESS', 0, 100).step(1).name('edge softness');
-    edgeFolder.add(config, 'CORNER', CORNER_MODES).name('corner behavior');
-
-    let touchFolder = gui.addFolder('Touch');
-    addPct(touchFolder, 'TOUCH_FORCE', 'touch force');
-    touchFolder.add(config, 'TOUCH_RADIUS', 0, 100).step(1).name('touch radius');
-    touchFolder.add(config, 'TOUCH_ATTRACTION', 0, 100).step(1).name('touch attraction');
-    touchFolder.add(config, 'TOUCH_REPULSION', 0, 100).step(1).name('touch repulsion');
-    touchFolder.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
-    touchFolder.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
-    touchFolder.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('touch sensitivity');
-    touchFolder.add(config, 'GESTURE', GESTURE_MODES).name('gesture mode');
-    touchFolder.add(config, 'INJECTION', INJECTION_MODES).name('injection mode');
-
-    let modesFolder = gui.addFolder('Modes');
-    modesFolder.add(config, 'VORTEX').name('vortex');
-    modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').onChange(v => {
+    scene.add(config, 'AUTOPLAY').name('auto-play');
+    scene.add(config, 'VORTEX').name('vortex');
+    scene.add(config, 'KALEIDOSCOPE').name('kaleidoscope').onChange(v => {
         if (v) config.MIRROR_MODE = 'None';
+        refreshGUI();
     });
-    modesFolder.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments')
+    scene.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments')
         .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
-    modesFolder.add(config, 'RAINBOW').name('rainbow');
-    addPct(modesFolder, 'RAINBOW_SPD', 'rainbow speed');
-    modesFolder.add(config, 'TRAILS').name('color trails');
-    modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch');
-
-    let colorsFolder = gui.addFolder('Colors');
-    colorsFolder.add(config, 'PALETTE', PALETTE_NAMES).name('palette').onChange(v => setPalette(v, 1.2));
-    colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions');
-    colorsFolder.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
-        .onChange(v => { config.TRANSITION_TIME = Number(v); });
-    colorsFolder.add(config, 'COLORFUL').name('colorful');
-
-    let effectsFolder = gui.addFolder('Effects');
-    effectsFolder.add(config, 'SHADING').name('shading');
-    effectsFolder.add(config, 'BLOOM').name('bloom');
-    addPct(effectsFolder, 'BLOOM_INT', 'bloom intensity');
-    addPct(effectsFolder, 'BLOOM_THR', 'bloom threshold');
-    effectsFolder.add(config, 'FLARE').name('flare');
-    effectsFolder.add(config, 'FLARE_STYLE', FLARE_STYLES).name('flare style');
-    effectsFolder.add(config, 'SUNRAYS').name('sunrays');
-    addPct(effectsFolder, 'SUNRAYS_W', 'sunrays weight');
-    effectsFolder.add(config, 'GAMMA').name('gamma');
-    effectsFolder.add(config, 'GAMMA_MODE', GAMMA_MODES).name('gamma mode');
-    effectsFolder.add(config, 'SPECULAR').name('specular');
-    effectsFolder.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
-    effectsFolder.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').onChange(v => {
+    scene.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').onChange(v => {
         if (v !== 'None') config.KALEIDOSCOPE = false;
+        refreshGUI();
     });
-    effectsFolder.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow intensity');
-    effectsFolder.add(config, 'GLOW_RADIUS', 0, 100).step(1).name('glow radius');
-    effectsFolder.add(config, 'REFRACTION', 0, 100).step(1).name('refraction');
-    effectsFolder.add(config, 'REFLECTION', 0, 100).step(1).name('reflection');
-    effectsFolder.add(config, 'TRANSPARENCY', 0, 100).step(1).name('transparency');
-    effectsFolder.add(config, 'DEPTH', 0, 100).step(1).name('depth');
+    addPct(scene, 'SPEED', 'speed');
 
-    let blacklightFolder = gui.addFolder('Blacklight');
-    blacklightFolder.add(config, 'BLACKLIGHT').name('blacklight mode');
-    blacklightFolder.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('blacklight intensity');
-    blacklightFolder.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
-    blacklightFolder.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color mode');
+    // Touch: what your fingers do
+    let touch = section(gui, 'Touch', 'touch');
+    touch.add(config, 'GESTURE', GESTURE_MODES).name('gesture');
+    touch.add(config, 'INJECTION', INJECTION_MODES).name('injection');
+    addPct(touch, 'TOUCH_FORCE', 'force');
+    touch.add(config, 'TOUCH_RADIUS', 0, 100).step(1).name('radius');
+    touch.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('sensitivity');
+    touch.add(config, 'TOUCH_ATTRACTION', 0, 100).step(1).name('attraction');
+    touch.add(config, 'TOUCH_REPULSION', 0, 100).step(1).name('repulsion');
+    touch.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
+    touch.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
+    touch.add(config, 'RANDOM_INJECTION').name('random color per touch');
 
-    let filtersFolder = gui.addFolder('Filters');
-    filtersFolder.add(config, 'PIXELS').name('pixels');
-    filtersFolder.add(config, 'PIXEL_MODE', Object.keys(PIXEL_MODES)).name('pixel mode');
-    filtersFolder.add(config, 'NEON').name('neon');
-    filtersFolder.add(config, 'EMBOSS').name('emboss');
-    filtersFolder.add(config, 'FRINGE').name('fringe');
-    filtersFolder.add(config, 'FILTER').name('film filter');
-    filtersFolder.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
-    filtersFolder.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
-    filtersFolder.add(config, 'INVERT').name('invert');
-    filtersFolder.add(config, 'SHAKE').name('shake').onChange(v => {
+    // Look: everything about color and light
+    let look = section(gui, 'Look', 'look');
+
+    let color = section(look, 'Color', 'palette');
+    color.add(config, 'PALETTE', PALETTE_NAMES).name('palette').onChange(v => setPalette(v, 1.2));
+    color.add(config, 'AUTO_TRANSITION').name('auto transitions');
+    color.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
+        .onChange(v => { config.TRANSITION_TIME = Number(v); });
+    color.add(config, 'RAINBOW').name('rainbow');
+    addPct(color, 'RAINBOW_SPD', 'rainbow speed');
+    color.add(config, 'COLORFUL').name('color cycling');
+
+    let lighting = section(look, 'Lighting', 'light');
+    lighting.add(config, 'SHADING').name('shading');
+    lighting.add(config, 'BLOOM').name('bloom');
+    addPct(lighting, 'BLOOM_INT', 'bloom intensity');
+    addPct(lighting, 'BLOOM_THR', 'bloom threshold');
+    lighting.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow');
+    lighting.add(config, 'GLOW_RADIUS', 0, 100).step(1).name('glow radius');
+    lighting.add(config, 'SUNRAYS').name('sunrays');
+    addPct(lighting, 'SUNRAYS_W', 'sunrays weight');
+    lighting.add(config, 'FLARE').name('lens flare');
+    lighting.add(config, 'FLARE_STYLE', FLARE_STYLES).name('flare style');
+    lighting.add(config, 'SPECULAR').name('specular');
+    lighting.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
+    lighting.add(config, 'REFLECTION', 0, 100).step(1).name('reflection');
+    lighting.add(config, 'REFRACTION', 0, 100).step(1).name('refraction');
+    lighting.add(config, 'DEPTH', 0, 100).step(1).name('depth');
+    lighting.add(config, 'TRANSPARENCY', 0, 100).step(1).name('transparency');
+
+    let blacklight = section(look, 'Blacklight', 'bulb');
+    blacklight.add(config, 'BLACKLIGHT').name('blacklight');
+    blacklight.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('intensity');
+    blacklight.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
+    blacklight.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color');
+
+    let filters = section(look, 'Filters', 'filters');
+    filters.add(config, 'GAMMA').name('tone mapping');
+    filters.add(config, 'GAMMA_MODE', GAMMA_MODES).name('tone');
+    filters.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
+    filters.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
+    filters.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
+    filters.add(config, 'BLUR', 0, 100).step(1).name('blur');
+    filters.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
+    filters.add(config, 'CHROMATIC_ABERRATION', 0, 100).step(1).name('chromatic aberration');
+    filters.add(config, 'FRINGE').name('lens fringe');
+    filters.add(config, 'NEON').name('neon outlines');
+    filters.add(config, 'EMBOSS').name('emboss');
+    filters.add(config, 'PIXELS').name('pixelate');
+    filters.add(config, 'PIXEL_MODE', Object.keys(PIXEL_MODES)).name('pixel size');
+    filters.add(config, 'FILTER').name('film look');
+    filters.add(config, 'INVERT').name('invert');
+    filters.add(config, 'MOTION').name('motion echoes');
+    filters.add(config, 'MOTION_STYLE', MOTION_STYLES).name('echo style');
+    filters.add(config, 'MOTION_INTENSITY', 0, 100).step(1).name('echo strength');
+    filters.add(config, 'SHAKE').name('shake').onChange(v => {
         if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
     });
-    filtersFolder.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
-    filtersFolder.add(config, 'MOTION').name('motion');
-    filtersFolder.add(config, 'MOTION_STYLE', MOTION_STYLES).name('motion style');
-    filtersFolder.add(config, 'MOTION_INTENSITY', 0, 100).step(1).name('motion intensity');
-    filtersFolder.add(config, 'CHROMATIC_ABERRATION', 0, 100).step(1).name('chromatic aberration');
-    filtersFolder.add(config, 'BLUR', 0, 100).step(1).name('blur');
-    filtersFolder.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
-    filtersFolder.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
+    filters.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
 
-    let particlesFolder = gui.addFolder('Particles');
-    particlesFolder.add(config, 'PARTICLES').name('particles');
-    particlesFolder.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix');
-    particlesFolder.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('intensity');
-    particlesFolder.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
-    particlesFolder.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
-    particlesFolder.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style');
-    particlesFolder.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
-    particlesFolder.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('length');
-    particlesFolder.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
-    particlesFolder.add(config, 'PARTICLE_GLOW', 0, 100).step(1).name('glow');
-    particlesFolder.add(config, 'PARTICLE_SPREAD', 0, 100).step(1).name('spread');
-    particlesFolder.add(config, 'PARTICLE_TURBULENCE', 0, 100).step(1).name('turbulence');
-    particlesFolder.add(config, 'PARTICLE_FADE', 0, 100).step(1).name('fade');
-    particlesFolder.add(config, 'PARTICLE_ATTRACTION', 0, 100).step(1).name('attraction');
-    particlesFolder.add(config, 'PARTICLE_COLLISION').name('collision');
-    particlesFolder.add(config, 'PARTICLE_TRAILS').name('trails');
-    particlesFolder.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
-    particlesFolder.addColor(config, 'PARTICLE_COLOR').name('single color');
+    let background = section(look, 'Background', 'layers');
+    background.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background');
+    background.addColor(config, 'BACK_COLOR').name('custom color').onChange(() => {
+        config.BACKGROUND = 'Custom';
+        refreshGUI();
+    });
+    background.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness');
+    background.add(config, 'BG_BLUR', 0, 100).step(1).name('blur');
+    background.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity');
 
-    let perfFolder = gui.addFolder('Performance');
-    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('performance mode').onChange(v => {
+    // Physics: how the fluid itself behaves
+    let physics = section(gui, 'Physics', 'physics');
+
+    let fluid = section(physics, 'Fluid', 'fluid');
+    fluid.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
+    fluid.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
+    addPct(fluid, 'RADIUS', 'splat radius');
+    addPct(fluid, 'DISSIPATION', 'dissipation');
+    fluid.add(config, 'TRAILS').name('color trails');
+    fluid.add(config, 'VISCOSITY', 0, 100).step(1).name('viscosity');
+    addPct(fluid, 'VORTICITY', 'vorticity');
+    addPct(fluid, 'DRAG', 'drag');
+    fluid.add(config, 'FLOW_STRENGTH', 0, 100).step(1).name('flow strength');
+    fluid.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure solver');
+    addPct(fluid, 'PRESSURE_STR', 'pressure strength');
+
+    let forces = section(physics, 'Forces', 'forces');
+    forces.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
+    forces.add(config, 'BUOYANCY', 0, 100).step(1).name('buoyancy (50 = none)');
+    forces.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
+    forces.add(config, 'SWIRL', 0, 100).step(1).name('swirl');
+    forces.add(config, 'ELASTICITY', 0, 100).step(1).name('elasticity');
+    forces.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
+    forces.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
+    forces.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
+    forces.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field');
+    forces.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
+
+    let edges = section(physics, 'Edges', 'edges');
+    edges.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
+    edges.add(config, 'CORNER', CORNER_MODES).name('corners');
+    edges.add(config, 'REPEL_STRENGTH', 0, 100).step(1).name('repel strength');
+    edges.add(config, 'REPEL_DISTANCE', 0, 100).step(1).name('repel distance');
+    edges.add(config, 'EDGE_BOUNCE', 0, 100).step(1).name('bounce');
+    edges.add(config, 'EDGE_FRICTION', 0, 100).step(1).name('friction');
+    edges.add(config, 'EDGE_SOFTNESS', 0, 100).step(1).name('softness');
+
+    // Particles
+    let parts = section(gui, 'Particles', 'particles');
+    parts.add(config, 'PARTICLES').name('particles');
+    parts.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style');
+    parts.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
+    parts.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
+    parts.addColor(config, 'PARTICLE_COLOR').name('single color');
+    parts.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix with fluid');
+    parts.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('brightness');
+    parts.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
+    parts.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('streak length');
+    parts.add(config, 'PARTICLE_GLOW', 0, 100).step(1).name('glow');
+    parts.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
+    parts.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
+    parts.add(config, 'PARTICLE_SPREAD', 0, 100).step(1).name('spread');
+    parts.add(config, 'PARTICLE_FADE', 0, 100).step(1).name('fade');
+    parts.add(config, 'PARTICLE_TURBULENCE', 0, 100).step(1).name('turbulence');
+    parts.add(config, 'PARTICLE_ATTRACTION', 0, 100).step(1).name('attraction');
+    parts.add(config, 'PARTICLE_COLLISION').name('collision');
+    parts.add(config, 'PARTICLE_TRAILS').name('trails');
+
+    // Text
+    let text = section(gui, 'Text', 'text');
+    text.add(config, 'TEXT').name('show text');
+    text.add({ fun: editText }, 'fun').name('Edit text');
+    text.add(config, 'TEXT_MODE', TEXT_MODES).name('mode');
+    text.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font');
+    text.add(config, 'TEXT_SIZE', 0, 100).step(1).name('size');
+    text.addColor(config, 'TEXT_COLOR').name('color');
+    text.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity');
+    text.add(config, 'TEXT_OUTLINE').name('outline');
+    text.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline width');
+    text.add(config, 'TEXT_GLOW').name('glow');
+    text.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow strength');
+    text.add(config, 'TEXT_X', 0, 100).step(1).name('position x');
+    text.add(config, 'TEXT_Y', 0, 100).step(1).name('position y');
+    text.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)');
+
+    // System: device settings, capture and wallpaper
+    let system = section(gui, 'System', 'system');
+
+    let perfFolder = section(system, 'Performance', 'gauge');
+    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('mode').onChange(v => {
         applyPerformanceMode(v);
         showToast('Performance · ' + v);
     });
     perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit');
-    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality');
     perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale');
     perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality');
     perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit');
+    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality');
     perfFolder.add(config, 'BATTERY_SAVER').name('battery saver');
-    perfFolder.add(perf, 'fps').name('current fps');
 
-    let textFolder = gui.addFolder('Text');
-    textFolder.add(config, 'TEXT').name('text');
-    textFolder.add(config, 'TEXT_MODE', TEXT_MODES).name('text mode');
-    textFolder.add({ fun: editText }, 'fun').name('✎ Edit text');
-    textFolder.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font');
-    textFolder.add(config, 'TEXT_SIZE', 0, 100).step(1).name('font size');
-    textFolder.addColor(config, 'TEXT_COLOR').name('text color');
-    textFolder.add(config, 'TEXT_OUTLINE').name('outline');
-    textFolder.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline thickness');
-    textFolder.add(config, 'TEXT_GLOW').name('text glow');
-    textFolder.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow intensity');
-    textFolder.add(config, 'TEXT_X', 0, 100).step(1).name('position x');
-    textFolder.add(config, 'TEXT_Y', 0, 100).step(1).name('position y');
-    textFolder.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)');
-    textFolder.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity');
+    let capture = section(system, 'Capture & Wallpaper', 'camera');
+    capture.add({ fun: captureScreenshot }, 'fun').name('Save screenshot');
+    capture.add(config, 'TRANSPARENT').name('transparent screenshots');
+    capture.add(config, 'SPLASHES').name('ambient splashes');
+    capture.add(config, 'WALLPAPER_CLEAR').name('fresh start on return');
+    capture.add({ fun: showWallpaperInfo }, 'fun').name('Use as wallpaper');
 
-    let backgroundFolder = gui.addFolder('Background');
-    backgroundFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background');
-    backgroundFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
-        config.BACKGROUND = 'Custom';
-    });
-    backgroundFolder.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness (50 = normal)');
-    backgroundFolder.add(config, 'BG_BLUR', 0, 100).step(1).name('blur');
-    backgroundFolder.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity');
-
-    let wallpaperFolder = gui.addFolder('Wallpaper');
-    wallpaperFolder.add(config, 'SPLASHES').name('splashes');
-    wallpaperFolder.add(config, 'WALLPAPER_CLEAR').name('clear on return');
-    wallpaperFolder.add({ fun: showWallpaperInfo }, 'fun').name('📱 Set live wallpaper');
-
-    let captureFolder = gui.addFolder('Capture');
-    captureFolder.add(config, 'TRANSPARENT').name('transparent');
-    captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
-
-    if (isMobile())
-        gui.close();
+    // Start with the everyday sections open
+    scene.open();
+    syncTopMenu(true);
+    setPanelOpen(!isMobile());
 }
 
 function isMobile () {
