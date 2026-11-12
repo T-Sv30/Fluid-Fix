@@ -26,6 +26,9 @@ SOFTWARE.
 
 // Simulation section
 
+// Internal render scale (Performance → render scale); a var so it exists before config is created
+var renderScaleFactor = 1;
+
 const canvas = document.getElementsByTagName('canvas')[0];
 resizeCanvas();
 
@@ -156,6 +159,14 @@ let config = {
     PARTICLE_COLOR: { r: 120, g: 220, b: 255 },
     // Stage 5
     SIM_MODE: 'Standard Fluid',
+    // Stage 6
+    FPS_LIMIT: 'Unlimited',
+    ADAPTIVE_QUALITY: false,
+    PERFORMANCE_MODE: 'Performance',
+    RENDER_SCALE: 100,
+    EFFECT_QUALITY: 'Medium',
+    PARTICLE_LIMIT: 'Maximum',
+    BATTERY_SAVER: false,
 }
 
 
@@ -786,7 +797,7 @@ function injectColor (p, moved, dt, vx, vy, force) {
 
     switch (mode) {
         case 'Continuous':
-            if (moved) emitSplat(x, y, vx, vy, p.color);
+            if (moved) strokeSplat(p, vx, vy, p.color, 1);
             else if (config.CONTINUOUS_DRAWING) emitSplat(x, y, 0, 0, p.color, 0.5);
             break;
         case 'Burst':
@@ -829,6 +840,20 @@ function injectColor (p, moved, dt, vx, vy, force) {
         case 'Directional':
             emitSplat(x, y, p.dirX * jet + vx * 0.3, p.dirY * jet + vy * 0.3, p.color, 0.8);
             break;
+    }
+}
+
+// Lays a stroke from the previous to the current position, filling gaps on fast swipes or low frame rates
+function strokeSplat (p, vx, vy, color, dyeScale) {
+    const ar = canvas.width / canvas.height;
+    const dist = Math.hypot((p.texcoordX - p.prevTexcoordX) * ar, p.texcoordY - p.prevTexcoordY);
+    const spacing = Math.max(0.01, Math.sqrt(config.SPLAT_RADIUS * splatRadiusScale / 100) * 0.7);
+    const n = Math.min(8, Math.max(1, Math.ceil(dist / spacing)));
+    for (let i = 1; i <= n; i++) {
+        const t = i / n;
+        const x = p.prevTexcoordX + (p.texcoordX - p.prevTexcoordX) * t;
+        const y = p.prevTexcoordY + (p.texcoordY - p.prevTexcoordY) * t;
+        emitSplat(x, y, vx / n, vy / n, color, dyeScale);
     }
 }
 
@@ -966,7 +991,7 @@ function runPost (dt) {
     postMaterial.setKeywords(postKeywords());
     postMaterial.bind();
     const u = postMaterial.uniforms;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = pixelRatio();
     gl.disable(gl.BLEND);
     gl.uniform1i(u.uFrame, frameFBO.attach(0));
     gl.uniform1i(u.uHistory, historyFBO.read.attach(1));
@@ -1442,7 +1467,7 @@ function createParticleTexture (w, h, data) {
 }
 
 function setupParticles () {
-    const count = PARTICLE_AMOUNTS[config.PARTICLE_AMOUNT] || 1024;
+    const count = effParticleCount();
     if (particles.state && particles.count === count) return;
 
     const { w, h } = particleStateSize(count);
@@ -1592,7 +1617,7 @@ function particleColors () {
 }
 
 function setParticleDrawUniforms (u, width, height) {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = pixelRatio();
     const colors = particleColors();
     gl.uniform1i(u.uState, particles.state.read.attach(0));
     gl.uniform1i(u.uVelocity, velocity.read.attach(1));
@@ -1871,6 +1896,180 @@ function updateSimMode (dt) {
     }
 }
 
+// Stage 6: performance and quality
+
+const FPS_LIMITS = { '15 FPS': 15, '24 FPS': 24, '30 FPS': 30, '45 FPS': 45, '60 FPS': 60, '90 FPS': 90, '120 FPS': 120, 'Unlimited': 0 };
+const EFFECT_LEVELS = {
+    'Very Low': { bloom: 64,  iterations: 4, sunrays: 64,  glow: 64 },
+    'Low':      { bloom: 128, iterations: 6, sunrays: 96,  glow: 96 },
+    'Medium':   { bloom: 256, iterations: 8, sunrays: 196, glow: 160 },   // the original values
+    'High':     { bloom: 384, iterations: 8, sunrays: 256, glow: 224 },
+    'Ultra':    { bloom: 512, iterations: 9, sunrays: 384, glow: 320 },
+};
+const EFFECT_NAMES = Object.keys(EFFECT_LEVELS);
+const PERFORMANCE_MODES = {
+    'Battery Saver':       { FPS_LIMIT: '30 FPS',    RENDER_SCALE: 60,  EFFECT_QUALITY: 'Low',    PARTICLE_LIMIT: 'Medium',    ADAPTIVE_QUALITY: true,  BATTERY_SAVER: true },
+    'Balanced':            { FPS_LIMIT: '60 FPS',    RENDER_SCALE: 85,  EFFECT_QUALITY: 'Medium', PARTICLE_LIMIT: 'Very High', ADAPTIVE_QUALITY: true,  BATTERY_SAVER: false },
+    'Performance':         { FPS_LIMIT: 'Unlimited', RENDER_SCALE: 100, EFFECT_QUALITY: 'Medium', PARTICLE_LIMIT: 'Maximum',   ADAPTIVE_QUALITY: false, BATTERY_SAVER: false },
+    'Maximum Performance': { FPS_LIMIT: 'Unlimited', RENDER_SCALE: 100, EFFECT_QUALITY: 'Ultra',  PARTICLE_LIMIT: 'Maximum',   ADAPTIVE_QUALITY: false, BATTERY_SAVER: false },
+};
+// Adaptive quality steps down through these levels when frames run slow
+const ADAPT_SCALE = [1, 0.85, 0.7, 0.6, 0.5];
+const ADAPT_MAX = ADAPT_SCALE.length - 1;
+
+const perf = {
+    fps: 60,
+    emaInterval: 1000 / 60,
+    lastFrameAt: 0,
+    adaptLevel: 0,
+    slowTime: 0,
+    fastTime: 0,
+    appliedDye: null,
+    appliedSim: null,
+    appliedEffect: null,
+};
+
+function applyPerformanceMode (name) {
+    if (!PERFORMANCE_MODES.hasOwnProperty(name)) return;
+    Object.assign(config, PERFORMANCE_MODES[name]);
+    config.PERFORMANCE_MODE = name;
+    perf.adaptLevel = 0;
+    refreshGUI();
+}
+
+function effFpsLimit () {
+    let f = FPS_LIMITS[config.FPS_LIMIT] || 0;
+    if (config.BATTERY_SAVER) f = f ? Math.min(f, 30) : 30;
+    return f;
+}
+
+function effRenderScale () {
+    let s = 0.25 + 0.75 * config.RENDER_SCALE / 100;
+    if (config.BATTERY_SAVER) s = Math.min(s, 0.7);
+    return Math.max(0.2, s * ADAPT_SCALE[perf.adaptLevel]);
+}
+
+function effEffectLevel () {
+    let i = Math.max(0, EFFECT_NAMES.indexOf(config.EFFECT_QUALITY));
+    if (config.BATTERY_SAVER) i = Math.min(i, 1);
+    if (perf.adaptLevel >= 2) i -= 1;
+    if (perf.adaptLevel >= 4) i -= 1;
+    return EFFECT_NAMES[Math.max(0, i)];
+}
+
+function effDyeResolution () {
+    let r = Number(config.DYE_RESOLUTION);
+    if (config.BATTERY_SAVER) r = Math.min(r, 512);
+    if (perf.adaptLevel >= 2) r = Math.min(r, 512);
+    if (perf.adaptLevel >= 3) r = Math.min(r, 256);
+    return r;
+}
+
+function effSimResolution () {
+    let r = Number(config.SIM_RESOLUTION);
+    if (perf.adaptLevel >= 4) r = Math.min(r, 64);
+    return r;
+}
+
+function effPressureIterations () {
+    let n = PRESSURE_LEVELS[config.PRESSURE_LEVEL] || config.PRESSURE_ITERATIONS;
+    if (config.BATTERY_SAVER) n = Math.min(n, 12);
+    return n;
+}
+
+function effParticleCount () {
+    let n = Math.min(PARTICLE_AMOUNTS[config.PARTICLE_AMOUNT] || 1024, PARTICLE_AMOUNTS[config.PARTICLE_LIMIT] || 16384);
+    if (config.BATTERY_SAVER) n = Math.min(n, 1024);
+    return n;
+}
+
+function pixelRatio () {
+    return (window.devicePixelRatio || 1) * (renderScaleFactor || 1);
+}
+
+// Returns false when this animation frame should be skipped to honor the frame rate limit
+function frameAllowed (now) {
+    const limit = effFpsLimit();
+    if (!limit) {
+        perf.lastFrameAt = now;
+        return true;
+    }
+    const interval = 1000 / limit;
+    const elapsed = now - perf.lastFrameAt;
+    if (elapsed < 0) {
+        perf.lastFrameAt = now;   // the clock jumped backwards; start a fresh schedule
+        return true;
+    }
+    if (elapsed < interval - 2) return false;
+    // Step the schedule forward by whole intervals so the average rate stays on target
+    perf.lastFrameAt = elapsed < interval * 2 ? perf.lastFrameAt + interval : now;
+    return true;
+}
+
+function measureFrame (intervalMs) {
+    if (intervalMs <= 0 || intervalMs > 250) return;   // ignore pauses such as a hidden tab
+    perf.emaInterval += (intervalMs - perf.emaInterval) * 0.1;
+    perf.fps = Math.round(1000 / perf.emaInterval);
+}
+
+// Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones
+function updateAdaptive (dt) {
+    if (!config.ADAPTIVE_QUALITY) {
+        if (perf.adaptLevel !== 0) perf.adaptLevel = 0;
+        perf.slowTime = perf.fastTime = 0;
+        return;
+    }
+    const target = Math.min(effFpsLimit() || 60, 60);
+    const fps = 1000 / perf.emaInterval;
+    if (fps < target * 0.85) {
+        perf.slowTime += dt;
+        perf.fastTime = 0;
+        if (perf.slowTime > 1.5 && perf.adaptLevel < ADAPT_MAX) {
+            perf.adaptLevel++;
+            perf.slowTime = 0;
+            showToast('Adaptive quality · lowered');
+        }
+    } else if (fps > target * 0.95) {
+        perf.fastTime += dt;
+        perf.slowTime = 0;
+        if (perf.fastTime > 5 && perf.adaptLevel > 0) {
+            perf.adaptLevel--;
+            perf.fastTime = 0;
+            showToast('Adaptive quality · raised');
+        }
+    } else {
+        perf.slowTime = perf.fastTime = 0;
+    }
+}
+
+function applyEffectLevel () {
+    const name = effEffectLevel();
+    if (perf.appliedEffect === name) return;
+    perf.appliedEffect = name;
+    const e = EFFECT_LEVELS[name];
+    config.BLOOM_RESOLUTION = e.bloom;
+    config.BLOOM_ITERATIONS = e.iterations;
+    config.SUNRAYS_RESOLUTION = e.sunrays;
+    if (bloom) {
+        initBloomFramebuffers();
+        initSunraysFramebuffers();
+    }
+}
+
+function currentGlowResolution () {
+    return EFFECT_LEVELS[effEffectLevel()].glow;
+}
+
+// Runs once per drawn frame, before anything is resized or rendered
+function updatePerformance (dt) {
+    updateAdaptive(dt);
+    renderScaleFactor = effRenderScale();
+    applyEffectLevel();
+    const dyeRes = effDyeResolution(), simRes = effSimResolution();
+    if (perf.appliedDye !== null && (perf.appliedDye !== dyeRes || perf.appliedSim !== simRes))
+        initFramebuffers();
+}
+
 startGUI();
 
 function getWebGLContext (canvas) {
@@ -2113,6 +2312,19 @@ function startGUI () {
     particlesFolder.add(config, 'PARTICLE_TRAILS').name('trails');
     particlesFolder.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
     particlesFolder.addColor(config, 'PARTICLE_COLOR').name('single color');
+
+    let perfFolder = gui.addFolder('Performance');
+    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('performance mode').listen().onChange(v => {
+        applyPerformanceMode(v);
+        showToast('Performance · ' + v);
+    });
+    perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit').listen();
+    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality').listen();
+    perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale').listen();
+    perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality').listen();
+    perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit').listen();
+    perfFolder.add(config, 'BATTERY_SAVER').name('battery saver').listen();
+    perfFolder.add(perf, 'fps').name('current fps').listen();
 
     let captureFolder = gui.addFolder('Capture');
     captureFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
@@ -3469,8 +3681,10 @@ const displayMaterial = new Material(baseVertexShader, displayShaderSource);
 const postMaterial = new Material(baseVertexShader, postShaderSource);
 
 function initFramebuffers () {
-    let simRes = getResolution(config.SIM_RESOLUTION);
-    let dyeRes = getResolution(config.DYE_RESOLUTION);
+    perf.appliedSim = effSimResolution();
+    perf.appliedDye = effDyeResolution();
+    let simRes = getResolution(perf.appliedSim);
+    let dyeRes = getResolution(perf.appliedDye);
 
     const texType = ext.halfFloatTexType;
     const rgba    = ext.formatRGBA;
@@ -3513,7 +3727,7 @@ function initBloomFramebuffers () {
 
     bloom = createFBO(res.width, res.height, rgba.internalFormat, rgba.format, texType, filtering);
 
-    let glowRes = getResolution(160);
+    let glowRes = getResolution(currentGlowResolution());
     glowFBO = createFBO(glowRes.width, glowRes.height, rgba.internalFormat, rgba.format, texType, filtering);
     glowTemp = createFBO(glowRes.width, glowRes.height, rgba.internalFormat, rgba.format, texType, filtering);
 
@@ -3675,25 +3889,40 @@ updateKeywords();
 initFramebuffers();
 multipleSplats(parseInt(Math.random() * 20) + 5);
 
-let lastUpdateTime = Date.now();
+let lastUpdateTime = null;
 let colorUpdateTimer = 0.0;
 update();
 
-function update () {
-    const dt = calcDeltaTime();
+function update (timestamp) {
+    // One clock for everything: the browser's frame timestamp
+    const now = typeof timestamp === 'number' ? timestamp : performance.now();
+    if (!frameAllowed(now)) {
+        requestAnimationFrame(update);
+        return;
+    }
+    const frameSeconds = perf.prevDrawn != null ? Math.min(Math.max((now - perf.prevDrawn) / 1000, 0), 0.25) : 1 / 60;
+    if (perf.prevDrawn != null) measureFrame(now - perf.prevDrawn);
+    perf.prevDrawn = now;
+
+    const dt = calcDeltaTime(now);
+    updatePerformance(frameSeconds);
     if (resizeCanvas())
         initFramebuffers();
     updateColors(dt);
     updatePalette(dt);
     updateBackground(dt);
     applyInputs(dt);
-    updateAutoplay(dt);
-    updateVortex(dt);
-    updateSimMode(dt);
+    // Emitters keep their 60-per-second rhythm even when fewer frames are drawn
+    const emitSteps = Math.min(4, Math.max(1, Math.round(dt * 60)));
+    for (let i = 0; i < emitSteps; i++) {
+        updateAutoplay(dt / emitSteps);
+        updateVortex(dt / emitSteps);
+        updateSimMode(dt / emitSteps);
+    }
     applyRandomness(dt);
     if (!config.PAUSED) {
         const simDt = dt * config.SPEED;
-        const substeps = Math.max(1, Math.ceil(simDt / 0.016667 - 1e-6));
+        const substeps = Math.max(1, Math.ceil(simDt / 0.0334 - 1e-6));
         for (let i = 0; i < substeps; i++)
             step(simDt / substeps);
     }
@@ -3703,10 +3932,10 @@ function update () {
     requestAnimationFrame(update);
 }
 
-function calcDeltaTime () {
-    let now = Date.now();
-    let dt = (now - lastUpdateTime) / 1000;
-    dt = Math.min(dt, 0.016666);
+function calcDeltaTime (now) {
+    let dt = lastUpdateTime == null ? 1 / 60 : (now - lastUpdateTime) / 1000;
+    // Allow longer frames so low frame-rate limits keep real-time speed (the solver sub-steps them)
+    dt = Math.min(Math.max(dt, 0), 1 / 15);
     lastUpdateTime = now;
     return dt;
 }
@@ -3783,7 +4012,7 @@ function step (dt) {
     pressureProgram.bind();
     gl.uniform2f(pressureProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform1i(pressureProgram.uniforms.uDivergence, divergence.attach(0));
-    const pressureIterations = PRESSURE_LEVELS[config.PRESSURE_LEVEL] || config.PRESSURE_ITERATIONS;
+    const pressureIterations = effPressureIterations();
     for (let i = 0; i < pressureIterations; i++) {
         gl.uniform1i(pressureProgram.uniforms.uPressure, pressure.read.attach(1));
         blit(pressure.write);
@@ -4347,7 +4576,7 @@ function getTextureScale (texture, width, height) {
 }
 
 function scaleByPixelRatio (input) {
-    let pixelRatio = window.devicePixelRatio || 1;
+    let pixelRatio = (window.devicePixelRatio || 1) * (renderScaleFactor || 1);
     return Math.floor(input * pixelRatio);
 }
 
