@@ -456,7 +456,7 @@ function randomizeConfig () {
     config.BACKGROUND = background;
     config.CURL = Math.round(rand(5, 45));
     config.SPLAT_RADIUS = rand(0.12, 0.5);
-    config.DENSITY_DISSIPATION = rand(0.4, 1.8);
+    config.DENSITY_DISSIPATION = pctFadeTo(rand(20, 100));
     config.VELOCITY_DISSIPATION = rand(0.1, 0.8);
     config.BLOOM_INTENSITY = rand(0.5, 1.3);
     config.BLOOM_THRESHOLD = rand(0.45, 0.75);
@@ -588,13 +588,20 @@ if (!ext.supportLinearFiltering) {
 // Every slider in the UI is 0-100%. These map a percentage to the engine value and back.
 const pctSpeedTo = p => p <= 50 ? p / 50 : 1 + (p - 50) / 25;          // 0..1x..3x, 50% = 1x
 const pctSpeedFrom = v => v <= 1 ? v * 50 : 50 + (v - 1) * 25;
+// Time: seconds for color to fade 95% of the way out. 0% = 0.2 s, 100% = 3 s.
+// The dye fades exponentially at rate d, so that takes ln(20) / d seconds.
+const FADE_LN = Math.log(20);
+const fadeSeconds = p => 0.2 + 2.8 * p / 100;
+const pctFadeTo = p => FADE_LN / fadeSeconds(p);
+const pctFadeFrom = d => d > 0 ? (FADE_LN / d - 0.2) / 2.8 * 100 : 100;
 const pctSquareTo = max => p => max * (p / 100) * (p / 100);           // finer control at the low end
 const pctSquareFrom = max => v => 100 * Math.sqrt(Math.max(v, 0) / max);
 const pctLinTo = (min, max) => p => min + (max - min) * p / 100;
 const pctLinFrom = (min, max) => v => 100 * (v - min) / (max - min);
 
 const PCT = {
-    TIME:            { cfg: 'SPEED',                to: pctSpeedTo,          from: pctSpeedFrom },
+    TIME:            { cfg: 'DENSITY_DISSIPATION',  to: pctFadeTo,           from: pctFadeFrom },
+    SPEED:           { cfg: 'SPEED',                to: pctSpeedTo,          from: pctSpeedFrom },
     RADIUS:          { cfg: 'SPLAT_RADIUS',         to: pctLinTo(0.01, 1),   from: pctLinFrom(0.01, 1) },
     DISSIPATION:     { cfg: 'DENSITY_DISSIPATION',  to: pctSquareTo(4),      from: pctSquareFrom(4) },
     DRAG:            { cfg: 'VELOCITY_DISSIPATION', to: pctSquareTo(4),      from: pctSquareFrom(4) },
@@ -1107,7 +1114,8 @@ function startGUI () {
 
     let simFolder = gui.addFolder('Simulation');
     simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
-    addPct(simFolder, 'TIME', 'time');
+    addPct(simFolder, 'TIME', 'time (0.2–3 s fade)');
+    addPct(simFolder, 'SPEED', 'speed');
     simFolder.add(config, 'AUTOPLAY').name('autoplay').listen();
     addPct(simFolder, 'RADIUS', 'radius');
     simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
