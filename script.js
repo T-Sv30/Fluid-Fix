@@ -555,12 +555,25 @@ function cyclePalette () {
 
 let guiRoot = null;
 
-function refreshGUI (gui) {
+function refreshGUI (gui, openOnly) {
     if (!gui) syncUI();
     gui = gui || guiRoot;
     if (!gui) return;
+    if (openOnly && gui.closed) return;
     gui.__controllers.forEach(c => c.updateDisplay());
-    Object.keys(gui.__folders).forEach(k => refreshGUI(gui.__folders[k]));
+    Object.keys(gui.__folders).forEach(k => refreshGUI(gui.__folders[k], openOnly));
+}
+
+// Keeps the visible panel in step with changes the app makes by itself (auto palettes, Freeze, fps).
+// Runs 4 times a second and only for open folders, instead of every frame for every control.
+let panelRefreshTimer = 0;
+
+function refreshOpenPanel (dt) {
+    panelRefreshTimer += dt;
+    if (panelRefreshTimer < 0.25 || !guiRoot || guiRoot.closed) return;
+    panelRefreshTimer = 0;
+    syncUI();
+    refreshGUI(guiRoot, true);
 }
 
 let toastTimer = null;
@@ -603,8 +616,9 @@ function pointerPrototype () {
 
 let pointers = [];
 let splatStack = [];
-// Splats are queued and applied in batches the next time anything reads the fluid
+// Splats and touch effects are queued and applied in batches the next time anything reads the fluid
 const splatQueue = { velocity: [], dye: [] };
+const effectQueue = { velocity: [], dye: [] };
 pointers.push(new pointerPrototype());
 
 const { gl, ext } = getWebGLContext(canvas);
@@ -775,40 +789,13 @@ function cycleSetting (key, list, label) {
 // Applies a local effect around (x, y) on velocity and/or dye, honoring Mirror/Kaleidoscope.
 // radial/tangential add velocity (texels/s), warp moves color (+ away, - toward), fade erases color.
 function pointEffect (x, y, opts) {
-    flushSplats();
     const radius = correctRadius(config.SPLAT_RADIUS * splatRadiusScale * (opts.area || 4) / 100.0);
     symmetryCopies(x, y, 0, 0).forEach(c => {
-        const spin = c[4] ? -1 : 1;
-        if (opts.radial || opts.tangential) {
-            pointForceProgram.bind();
-            const u = pointForceProgram.uniforms;
-            gl.uniform1i(u.uTarget, velocity.read.attach(0));
-            gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
-            gl.uniform2f(u.point, c[0], c[1]);
-            gl.uniform1f(u.radius, radius);
-            gl.uniform1f(u.radial, opts.radial || 0);
-            gl.uniform1f(u.tangential, (opts.tangential || 0) * spin);
-            gl.uniform1f(u.warp, 0);
-            gl.uniform1f(u.fade, opts.velocityFade || 0);
-            gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
-            blit(velocity.write);
-            velocity.swap();
-        }
-        if (opts.warp || opts.fade) {
-            pointForceProgram.bind();
-            const u = pointForceProgram.uniforms;
-            gl.uniform1i(u.uTarget, dye.read.attach(0));
-            gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
-            gl.uniform2f(u.point, c[0], c[1]);
-            gl.uniform1f(u.radius, radius);
-            gl.uniform1f(u.radial, 0);
-            gl.uniform1f(u.tangential, 0);
-            gl.uniform1f(u.warp, opts.warp || 0);
-            gl.uniform1f(u.fade, opts.fade || 0);
-            gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
-            blit(dye.write);
-            dye.swap();
-        }
+        const spin = c[4] ? -1 : 1;   // mirrored copies turn the other way
+        if (opts.radial || opts.tangential || opts.velocityFade)
+            effectQueue.velocity.push(c[0], c[1], radius, opts.radial || 0, (opts.tangential || 0) * spin, opts.velocityFade || 0);
+        if (opts.warp || opts.fade)
+            effectQueue.dye.push(c[0], c[1], radius, opts.warp || 0, opts.fade || 0, 0);
     });
 }
 
@@ -896,7 +883,7 @@ function updateTouches (dt) {
     pointers.forEach(p => {
         const moved = p.moved;
         p.moved = false;
-        if (!p.down && !moved) return;
+        if (!p.down && !moved && !p.justDown) return;
         if (p.down) p.heldTime = (p.heldTime || 0) + dt;
 
         const x = p.texcoordX, y = p.texcoordY;
@@ -1554,8 +1541,25 @@ function ensureParticleTargets () {
     }
 }
 
+// Frees everything particles use on the GPU; it is rebuilt the next time they are turned on
+function releaseParticles () {
+    if (!particles.state && !particles.trail && !particles.density) return;
+    if (particles.state) {
+        destroyFBO(particles.state.read);
+        destroyFBO(particles.state.write);
+    }
+    destroyDoubleFBO(particles.trail);
+    destroyFBO(particles.density);
+    if (particles.vertexBuffer) gl.deleteBuffer(particles.vertexBuffer);
+    particles.state = particles.trail = particles.density = particles.vertexBuffer = null;
+    particles.count = 0;
+}
+
 function particlesReady () {
-    if (!config.PARTICLES) return false;
+    if (!config.PARTICLES) {
+        releaseParticles();
+        return false;
+    }
     if (particles.supported === null) {
         particles.supported = detectParticleSupport();
         if (particles.supported) {
@@ -2522,6 +2526,8 @@ function clearFluid () {
                      particles.trail && particles.trail.read, particles.trail && particles.trail.write];
     splatQueue.velocity.length = 0;
     splatQueue.dye.length = 0;
+    effectQueue.velocity.length = 0;
+    effectQueue.dye.length = 0;
     gl.clearColor(0, 0, 0, 0);
     targets.forEach(t => {
         if (!t) return;
@@ -3001,8 +3007,8 @@ function startGUI () {
     gui.add({ fun: randomizeConfig }, 'fun').name('✨ Randomize');
     freezeController = gui.add({ fun: () => { toggleFreeze(); } }, 'fun').name('❄ Freeze');
     gui.add({ fun: cyclePalette }, 'fun').name('🎨 Next palette');
-    gui.add(config, 'AUTOPLAY').name('auto-play').listen();
-    gui.add(config, 'VORTEX').name('vortex').listen();
+    gui.add(config, 'AUTOPLAY').name('auto-play');
+    gui.add(config, 'VORTEX').name('vortex');
     gui.add({ fun: () => {
         splatStack.push(parseInt(Math.random() * 20) + 5);
     } }, 'fun').name('Random splats');
@@ -3025,13 +3031,13 @@ function startGUI () {
     presetsFolder.add({ fun: resetSimulation }, 'fun').name('↺ Reset simulation');
 
     let simFolder = gui.addFolder('Simulation');
-    simFolder.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').listen().onChange(v => {
+    simFolder.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').onChange(v => {
         applySimMode(v);
         showToast('Mode · ' + v);
     });
     simFolder.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
     addPct(simFolder, 'SPEED', 'speed');
-    simFolder.add(config, 'AUTOPLAY').name('autoplay').listen();
+    simFolder.add(config, 'AUTOPLAY').name('autoplay');
     addPct(simFolder, 'RADIUS', 'radius');
     simFolder.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
     addPct(simFolder, 'DISSIPATION', 'dissipation');
@@ -3039,7 +3045,7 @@ function startGUI () {
     addPct(simFolder, 'VORTICITY', 'vorticity');
     simFolder.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
     simFolder.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure');
-    simFolder.add(config, 'PAUSED').name('paused').listen();
+    simFolder.add(config, 'PAUSED').name('paused');
 
     let forcesFolder = gui.addFolder('Forces');
     forcesFolder.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
@@ -3052,7 +3058,7 @@ function startGUI () {
     forcesFolder.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
     forcesFolder.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
     forcesFolder.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
-    forcesFolder.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field').listen();
+    forcesFolder.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field');
     forcesFolder.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
 
     let edgeFolder = gui.addFolder('Edges');
@@ -3072,24 +3078,24 @@ function startGUI () {
     touchFolder.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
     touchFolder.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
     touchFolder.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('touch sensitivity');
-    touchFolder.add(config, 'GESTURE', GESTURE_MODES).name('gesture mode').listen();
-    touchFolder.add(config, 'INJECTION', INJECTION_MODES).name('injection mode').listen();
+    touchFolder.add(config, 'GESTURE', GESTURE_MODES).name('gesture mode');
+    touchFolder.add(config, 'INJECTION', INJECTION_MODES).name('injection mode');
 
     let modesFolder = gui.addFolder('Modes');
-    modesFolder.add(config, 'VORTEX').name('vortex').listen();
-    modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').listen().onChange(v => {
+    modesFolder.add(config, 'VORTEX').name('vortex');
+    modesFolder.add(config, 'KALEIDOSCOPE').name('kaleidoscope').onChange(v => {
         if (v) config.MIRROR_MODE = 'None';
     });
-    modesFolder.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments').listen()
+    modesFolder.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments')
         .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
-    modesFolder.add(config, 'RAINBOW').name('rainbow').listen();
+    modesFolder.add(config, 'RAINBOW').name('rainbow');
     addPct(modesFolder, 'RAINBOW_SPD', 'rainbow speed');
-    modesFolder.add(config, 'TRAILS').name('color trails').listen();
-    modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch').listen();
+    modesFolder.add(config, 'TRAILS').name('color trails');
+    modesFolder.add(config, 'RANDOM_INJECTION').name('random color on touch');
 
     let colorsFolder = gui.addFolder('Colors');
-    colorsFolder.add(config, 'PALETTE', PALETTE_NAMES).name('palette').listen().onChange(v => setPalette(v, 1.2));
-    colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions').listen();
+    colorsFolder.add(config, 'PALETTE', PALETTE_NAMES).name('palette').onChange(v => setPalette(v, 1.2));
+    colorsFolder.add(config, 'AUTO_TRANSITION').name('auto transitions');
     colorsFolder.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
         .onChange(v => { config.TRANSITION_TIME = Number(v); });
     colorsFolder.add(config, 'COLORFUL').name('colorful');
@@ -3107,7 +3113,7 @@ function startGUI () {
     effectsFolder.add(config, 'GAMMA_MODE', GAMMA_MODES).name('gamma mode');
     effectsFolder.add(config, 'SPECULAR').name('specular');
     effectsFolder.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
-    effectsFolder.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').listen().onChange(v => {
+    effectsFolder.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').onChange(v => {
         if (v !== 'None') config.KALEIDOSCOPE = false;
     });
     effectsFolder.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow intensity');
@@ -3118,7 +3124,7 @@ function startGUI () {
     effectsFolder.add(config, 'DEPTH', 0, 100).step(1).name('depth');
 
     let blacklightFolder = gui.addFolder('Blacklight');
-    blacklightFolder.add(config, 'BLACKLIGHT').name('blacklight mode').listen();
+    blacklightFolder.add(config, 'BLACKLIGHT').name('blacklight mode');
     blacklightFolder.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('blacklight intensity');
     blacklightFolder.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
     blacklightFolder.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color mode');
@@ -3146,12 +3152,12 @@ function startGUI () {
     filtersFolder.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
 
     let particlesFolder = gui.addFolder('Particles');
-    particlesFolder.add(config, 'PARTICLES').name('particles').listen();
+    particlesFolder.add(config, 'PARTICLES').name('particles');
     particlesFolder.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix');
     particlesFolder.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('intensity');
     particlesFolder.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
     particlesFolder.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
-    particlesFolder.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style').listen();
+    particlesFolder.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style');
     particlesFolder.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
     particlesFolder.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('length');
     particlesFolder.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
@@ -3166,46 +3172,46 @@ function startGUI () {
     particlesFolder.addColor(config, 'PARTICLE_COLOR').name('single color');
 
     let perfFolder = gui.addFolder('Performance');
-    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('performance mode').listen().onChange(v => {
+    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('performance mode').onChange(v => {
         applyPerformanceMode(v);
         showToast('Performance · ' + v);
     });
-    perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit').listen();
-    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality').listen();
-    perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale').listen();
-    perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality').listen();
-    perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit').listen();
-    perfFolder.add(config, 'BATTERY_SAVER').name('battery saver').listen();
-    perfFolder.add(perf, 'fps').name('current fps').listen();
+    perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit');
+    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality');
+    perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale');
+    perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality');
+    perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit');
+    perfFolder.add(config, 'BATTERY_SAVER').name('battery saver');
+    perfFolder.add(perf, 'fps').name('current fps');
 
     let textFolder = gui.addFolder('Text');
-    textFolder.add(config, 'TEXT').name('text').listen();
-    textFolder.add(config, 'TEXT_MODE', TEXT_MODES).name('text mode').listen();
+    textFolder.add(config, 'TEXT').name('text');
+    textFolder.add(config, 'TEXT_MODE', TEXT_MODES).name('text mode');
     textFolder.add({ fun: editText }, 'fun').name('✎ Edit text');
-    textFolder.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font').listen();
-    textFolder.add(config, 'TEXT_SIZE', 0, 100).step(1).name('font size').listen();
-    textFolder.addColor(config, 'TEXT_COLOR').name('text color').listen();
-    textFolder.add(config, 'TEXT_OUTLINE').name('outline').listen();
-    textFolder.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline thickness').listen();
-    textFolder.add(config, 'TEXT_GLOW').name('text glow').listen();
-    textFolder.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow intensity').listen();
-    textFolder.add(config, 'TEXT_X', 0, 100).step(1).name('position x').listen();
-    textFolder.add(config, 'TEXT_Y', 0, 100).step(1).name('position y').listen();
-    textFolder.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)').listen();
-    textFolder.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity').listen();
+    textFolder.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font');
+    textFolder.add(config, 'TEXT_SIZE', 0, 100).step(1).name('font size');
+    textFolder.addColor(config, 'TEXT_COLOR').name('text color');
+    textFolder.add(config, 'TEXT_OUTLINE').name('outline');
+    textFolder.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline thickness');
+    textFolder.add(config, 'TEXT_GLOW').name('text glow');
+    textFolder.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow intensity');
+    textFolder.add(config, 'TEXT_X', 0, 100).step(1).name('position x');
+    textFolder.add(config, 'TEXT_Y', 0, 100).step(1).name('position y');
+    textFolder.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)');
+    textFolder.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity');
 
     let backgroundFolder = gui.addFolder('Background');
-    backgroundFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background').listen();
-    backgroundFolder.addColor(config, 'BACK_COLOR').name('background color').listen().onChange(() => {
+    backgroundFolder.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background');
+    backgroundFolder.addColor(config, 'BACK_COLOR').name('background color').onChange(() => {
         config.BACKGROUND = 'Custom';
     });
-    backgroundFolder.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness (50 = normal)').listen();
-    backgroundFolder.add(config, 'BG_BLUR', 0, 100).step(1).name('blur').listen();
-    backgroundFolder.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity').listen();
+    backgroundFolder.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness (50 = normal)');
+    backgroundFolder.add(config, 'BG_BLUR', 0, 100).step(1).name('blur');
+    backgroundFolder.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity');
 
     let wallpaperFolder = gui.addFolder('Wallpaper');
-    wallpaperFolder.add(config, 'SPLASHES').name('splashes').listen();
-    wallpaperFolder.add(config, 'WALLPAPER_CLEAR').name('clear on return').listen();
+    wallpaperFolder.add(config, 'SPLASHES').name('splashes');
+    wallpaperFolder.add(config, 'WALLPAPER_CLEAR').name('clear on return');
     wallpaperFolder.add({ fun: showWallpaperInfo }, 'fun').name('📱 Set live wallpaper');
 
     let captureFolder = gui.addFolder('Capture');
@@ -3222,7 +3228,7 @@ function isMobile () {
 
 function captureScreenshot () {
     let res = getResolution(config.CAPTURE_RESOLUTION);
-    let target = createFBO(res.width, res.height, ext.formatRGBA.internalFormat, ext.formatRGBA.format, ext.halfFloatTexType, gl.NEAREST);
+    let target = createFBO(res.width, res.height, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
     render(target);
 
     let texture = framebufferToTexture(target);
@@ -3238,8 +3244,8 @@ function captureScreenshot () {
 function framebufferToTexture (target) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
     let length = target.width * target.height * 4;
-    let texture = new Float32Array(length);
-    gl.readPixels(0, 0, target.width, target.height, gl.RGBA, gl.FLOAT, texture);
+    let texture = new Uint8Array(length);
+    gl.readPixels(0, 0, target.width, target.height, gl.RGBA, gl.UNSIGNED_BYTE, texture);
     return texture;
 }
 
@@ -3249,18 +3255,14 @@ function normalizeTexture (texture, width, height) {
     for (let i = height - 1; i >= 0; i--) {
         for (let j = 0; j < width; j++) {
             let nid = i * width * 4 + j * 4;
-            result[nid + 0] = clamp01(texture[id + 0]) * 255;
-            result[nid + 1] = clamp01(texture[id + 1]) * 255;
-            result[nid + 2] = clamp01(texture[id + 2]) * 255;
-            result[nid + 3] = clamp01(texture[id + 3]) * 255;
+            result[nid + 0] = texture[id + 0];
+            result[nid + 1] = texture[id + 1];
+            result[nid + 2] = texture[id + 2];
+            result[nid + 3] = texture[id + 3];
             id += 4;
         }
     }
     return result;
-}
-
-function clamp01 (input) {
-    return Math.min(Math.max(input, 0), 1);
 }
 
 function textureToCanvas (texture, width, height) {
@@ -4316,31 +4318,43 @@ const pointForceShader = compileShader(gl.FRAGMENT_SHADER, `
     varying vec2 vUv;
     uniform sampler2D uTarget;
     uniform float aspectRatio;
-    uniform vec2 point;
-    uniform float radius;
-    uniform float radial;
-    uniform float tangential;
-    uniform float warp;
-    uniform float fade;
     uniform float wrap;
+    uniform float mode;           // 0: velocity (radial, tangential, fade)  1: color (warp, fade)
+    uniform int count;
+    uniform vec3 points[BATCH];   // x, y, radius
+    uniform vec3 params[BATCH];
 
     void main () {
-        vec2 d = vUv - point;
-        if (wrap > 0.5) d -= floor(d + 0.5);
-        d.x *= aspectRatio;
-        float r = length(d);
-        float g = exp(-dot(d, d) / radius);
-        vec2 dir = r > 1e-5 ? d / r : vec2(0.0);
-        vec2 tang = vec2(-dir.y, dir.x);
-
-        vec2 off = dir * warp * g;
-        off.x /= aspectRatio;
-        vec4 c = texture2D(uTarget, vUv - off);
-        c.xy += (dir * radial + tang * tangential) * g;
-        c *= 1.0 - fade * g;
-        gl_FragColor = c;
+        vec2 add = vec2(0.0);
+        vec2 off = vec2(0.0);
+        float keep = 1.0;
+        for (int i = 0; i < BATCH; i++) {
+            if (i >= count) break;
+            vec2 d = vUv - points[i].xy;
+            if (wrap > 0.5) d -= floor(d + 0.5);
+            d.x *= aspectRatio;
+            float r = length(d);
+            float g = exp(-dot(d, d) / points[i].z);
+            vec2 dir = r > 1e-5 ? d / r : vec2(0.0);
+            vec3 q = params[i];
+            if (mode < 0.5) {
+                add += (dir * q.x + vec2(-dir.y, dir.x) * q.y) * g;
+                keep *= 1.0 - q.z * g;
+            } else {
+                off += dir * q.x * g;
+                keep *= 1.0 - q.y * g;
+            }
+        }
+        if (mode < 0.5) {
+            vec4 c = texture2D(uTarget, vUv);
+            c.xy = (c.xy + add) * keep;
+            gl_FragColor = c;
+        } else {
+            off.x /= aspectRatio;
+            gl_FragColor = texture2D(uTarget, vUv - off) * keep;
+        }
     }
-`);
+`, ['BATCH ' + SPLAT_BATCH]);
 
 const displacementShader = compileShader(gl.FRAGMENT_SHADER, `
     precision highp float;
@@ -4855,6 +4869,7 @@ canvas.addEventListener('webglcontextlost', e => {
     contextLost = true;
     try { storeSet('fluidfix.recover', JSON.stringify(snapshotValues())); } catch (err) { /* nothing to keep */ }
     showToast('Graphics were reset · restoring…');
+    setTimeout(() => window.location.reload(), 5000);   // in case the browser never restores it
 });
 canvas.addEventListener('webglcontextrestored', () => window.location.reload());
 
@@ -4893,7 +4908,7 @@ function update (timestamp) {
         updateSimMode(dt / emitSteps);
     }
     applyRandomness(dt);
-    if (!config.PAUSED) {
+    if (!config.PAUSED && config.SPEED > 0) {
         const simDt = dt * config.SPEED;
         const substeps = Math.max(1, Math.ceil(simDt / 0.0334 - 1e-6));
         for (let i = 0; i < substeps; i++)
@@ -4902,6 +4917,7 @@ function update (timestamp) {
     updateParticles(dt);
     render(null, dt);
     syncTopMenu();
+    refreshOpenPanel(frameDt);
     requestAnimationFrame(update);
 }
 
@@ -5302,6 +5318,35 @@ function splatVelocity (x, y, dx, dy, radiusScale) {
     splatQueue.velocity.push(x, y, radius, dx, dy, 0);
 }
 
+function applyEffectQueue (queue, target, mode) {
+    const n = queue.length / 6;
+    if (!n) return;
+    const u = pointForceProgram.uniforms;
+    const points = new Float32Array(SPLAT_BATCH * 3);
+    const params = new Float32Array(SPLAT_BATCH * 3);
+    pointForceProgram.bind();
+    gl.uniform1f(u.aspectRatio, canvas.width / canvas.height);
+    gl.uniform1f(u.wrap, effectiveEdgeMode() === 1 ? 1 : 0);
+    gl.uniform1f(u.mode, mode);
+    for (let start = 0; start < n; start += SPLAT_BATCH) {
+        const count = Math.min(SPLAT_BATCH, n - start);
+        for (let i = 0; i < count; i++) {
+            const o = (start + i) * 6;
+            for (let j = 0; j < 3; j++) {
+                points[i * 3 + j] = queue[o + j];
+                params[i * 3 + j] = queue[o + 3 + j];
+            }
+        }
+        gl.uniform1i(u.count, count);
+        gl.uniform3fv(u['points[0]'], points);
+        gl.uniform3fv(u['params[0]'], params);
+        gl.uniform1i(u.uTarget, target.read.attach(0));
+        blit(target.write);
+        target.swap();
+    }
+    queue.length = 0;
+}
+
 function applySplatQueue (queue, target) {
     const n = queue.length / 6;
     if (!n) return;
@@ -5333,8 +5378,11 @@ function applySplatQueue (queue, target) {
 }
 
 function flushSplats () {
-    if (!splatQueue.velocity.length && !splatQueue.dye.length) return;
+    if (!splatQueue.velocity.length && !splatQueue.dye.length && !effectQueue.velocity.length && !effectQueue.dye.length) return;
     gl.disable(gl.BLEND);
+    // Touch effects first, then splats: the same order as when each ran on its own
+    applyEffectQueue(effectQueue.velocity, velocity, 0);
+    applyEffectQueue(effectQueue.dye, dye, 1);
     applySplatQueue(splatQueue.velocity, velocity);
     applySplatQueue(splatQueue.dye, dye);
 }
@@ -5346,7 +5394,14 @@ function correctRadius (radius) {
     return radius;
 }
 
+// Finishes any edit in a panel field (and closes the phone keyboard) when the fluid is touched
+function releaseFocus () {
+    const a = document.activeElement;
+    if (a && a !== document.body && a.blur) a.blur();
+}
+
 canvas.addEventListener('mousedown', e => {
+    releaseFocus();
     let posX = scaleByPixelRatio(e.offsetX);
     let posY = scaleByPixelRatio(e.offsetY);
     updatePointerDownData(pointers[0], -1, posX, posY);
@@ -5371,6 +5426,7 @@ function touchPointer (identifier) {
 
 canvas.addEventListener('touchstart', e => {
     e.preventDefault();
+    releaseFocus();
     const touches = e.changedTouches;
     for (let i = 0; i < touches.length; i++) {
         let pointer = touchPointer(touches[i].identifier)
