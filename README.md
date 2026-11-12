@@ -1,17 +1,22 @@
-# WebGL Fluid Simulation
+# Fluid Fix
 
-[Play here](https://paveldogreat.github.io/WebGL-Fluid-Simulation/)
+An interactive WebGL fluid simulation that runs in desktop and mobile browsers. Drag across the screen to stir the fluid; open the settings panel to change resolution, colors, bloom, sunrays and more.
 
-<img src="/screenshot.jpg?raw=true" width="880">
+<img src="screenshot.jpg" width="880">
 
-## References
+## Run it
 
-https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-38-fast-fluid-dynamics-simulation-gpu
+Open `index.html` in a browser, or serve the folder with any static web server (e.g. `python3 -m http.server`).
 
-https://github.com/mharrys/fluids-2d
+## Credits
 
-https://github.com/haxiomic/GPU-Fluid-Experiments
+Based on [WebGL Fluid Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation) by Pavel Dobryakov.
+
+References:
+- [GPU Gems, Chapter 38: Fast Fluid Dynamics Simulation on the GPU](https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-38-fast-fluid-dynamics-simulation-gpu)
+- https://github.com/mharrys/fluids-2d
+- https://github.com/haxiomic/GPU-Fluid-Experiments
 
 ## License
 
-The code is available under the [MIT license](LICENSE)
+MIT. See [LICENSE](LICENSE).
