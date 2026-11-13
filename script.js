@@ -24,6 +24,10 @@ SOFTWARE.
 
 'use strict';
 
+const APP_VERSION = '1.0.0';
+
+const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
 // Simulation section
 
 // Internal render scale (Performance → render scale); a var so it exists before config is created
@@ -35,7 +39,7 @@ resizeCanvas();
 let config = {
     SIM_RESOLUTION: 128,
     DYE_RESOLUTION: 1024,
-    CAPTURE_RESOLUTION: 512,
+    CAPTURE_RESOLUTION: 1080,
     DENSITY_DISSIPATION: 1,
     VELOCITY_DISSIPATION: 0.2,
     PRESSURE: 0.8,
@@ -265,7 +269,7 @@ let paletteFadeTime = 1.2;
 let paletteHold = 0;
 
 function setPalette (name, fadeSeconds) {
-    if (!PALETTES.hasOwnProperty(name)) return;
+    if (!has(PALETTES, name)) return;
     paletteFrom = paletteMix < 0.5 ? paletteFrom : paletteTo;
     paletteTo = name;
     paletteMix = 0;
@@ -551,29 +555,21 @@ function cyclePalette () {
     showToast('Palette · ' + next);
 }
 
-// GUI helpers
+// Interface helpers
 
-let guiRoot = null;
-
-function refreshGUI (gui, openOnly) {
-    if (!gui) syncUI();
-    gui = gui || guiRoot;
-    if (!gui) return;
-    if (openOnly && gui.closed) return;
-    gui.__controllers.forEach(c => c.updateDisplay());
-    Object.keys(gui.__folders).forEach(k => refreshGUI(gui.__folders[k], openOnly));
+// Re-reads every visible control after the app changes settings by itself
+function refreshGUI () {
+    if (window.RipplUI) window.RipplUI.refresh();
 }
 
-// Keeps the visible panel in step with changes the app makes by itself (auto palettes, Freeze, fps).
-// Runs 4 times a second and only for open folders, instead of every frame for every control.
+// Keeps the dock, status line and open panel in step with the app. Runs 4 times a second.
 let panelRefreshTimer = 0;
 
 function refreshOpenPanel (dt) {
     panelRefreshTimer += dt;
-    if (panelRefreshTimer < 0.25 || !guiRoot || guiRoot.closed) return;
+    if (panelRefreshTimer < 0.25) return;
     panelRefreshTimer = 0;
-    syncUI();
-    refreshGUI(guiRoot, true);
+    window.RipplUI.tick();
 }
 
 let toastTimer = null;
@@ -653,23 +649,6 @@ const PCT = {
     SUNRAYS_W:       { cfg: 'SUNRAYS_WEIGHT',       to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
     RAINBOW_SPD:     { cfg: 'RAINBOW_SPEED',        to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
 };
-
-const ui = {};
-
-function syncUI () {
-    Object.keys(PCT).forEach(k => {
-        const m = PCT[k];
-        ui[k] = Math.round(Math.min(100, Math.max(0, m.from(config[m.cfg]))));
-    });
-}
-syncUI();
-
-function addPct (folder, key, label) {
-    const m = PCT[key];
-    return folder.add(ui, key, 0, 100).step(1).name(label).onChange(v => {
-        config[m.cfg] = m.to(v);
-    });
-}
 
 const QUALITY_LEVELS = { 'Very Low': 128, 'Low': 256, 'Medium': 512, 'High': 1024, 'Super High': 1536, 'Ultra High': 2048 };
 const PRESSURE_LEVELS = { 'Low': 10, 'Norm': 20, 'Max': 50 };
@@ -1041,7 +1020,7 @@ function applyGlow () {
     copyProgram.bind();
     gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
     blit(glowFBO);
-    blur(glowFBO, glowTemp, 1 + Math.round(config.GLOW_RADIUS / 100 * 11));
+    blurTarget(glowFBO, glowTemp, 1 + Math.round(config.GLOW_RADIUS / 100 * 11));
 }
 
 function uvColor () {
@@ -1760,7 +1739,7 @@ const SIM_MODE_NAMES = Object.keys(SIM_MODES);
 const modeState = { t: 0, timer: 0, prev: [] };
 
 function applySimMode (name) {
-    if (!SIM_MODES.hasOwnProperty(name)) return;
+    if (!has(SIM_MODES, name)) return;
     Object.assign(config, MODE_BASE, SIM_MODES[name]);
     config.SIM_MODE = name;
     modeState.t = 0;
@@ -1966,7 +1945,7 @@ const perf = {
 };
 
 function applyPerformanceMode (name) {
-    if (!PERFORMANCE_MODES.hasOwnProperty(name)) return;
+    if (!has(PERFORMANCE_MODES, name)) return;
     Object.assign(config, PERFORMANCE_MODES[name]);
     config.PERFORMANCE_MODE = name;
     perf.adaptLevel = 0;
@@ -2215,7 +2194,7 @@ function cleanValues (values) {
     const out = {};
     if (!values || typeof values !== 'object') return out;
     Object.keys(values).forEach(k => {
-        if (SNAPSHOT_EXCLUDE.has(k) || !config.hasOwnProperty(k)) return;
+        if (SNAPSHOT_EXCLUDE.has(k) || !has(config, k)) return;
         const v = validValue(k, values[k]);
         if (v !== undefined) out[k] = v;
     });
@@ -2238,13 +2217,8 @@ function applyValues (values, fromDefaults) {
 
 // ---------- Presets ----------
 
-const ui7 = { preset: 'Default', presetName: 'Default' };
-let presetCtrl = null;
-
-function rebuildPresetDropdown () {
-    if (!presetCtrl || !presetCtrl.options) return;
-    presetCtrl = presetCtrl.options(presetNames()).name('preset').onChange(v => selectPreset(v, true));
-    presetCtrl.updateDisplay();
+function refreshPresetList () {
+    if (window.RipplUI) window.RipplUI.refreshPresets();
 }
 
 // Restores the last preset used on this device; runs once everything is initialized
@@ -2309,6 +2283,7 @@ function saveStoredPresets () {
 function safeName (name, fallback) {
     const clean = String(name == null ? '' : name)
         .replace(/[<>&"'`\\]/g, '')
+        // eslint-disable-next-line no-control-regex -- stripping control characters is the point
         .replace(/[\u0000-\u001f\u007f]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
@@ -2321,7 +2296,7 @@ function presetNames () {
 }
 
 function isBuiltin (name) {
-    return BUILTIN_PRESETS.hasOwnProperty(name);
+    return has(BUILTIN_PRESETS, name);
 }
 
 function findUserPreset (name) {
@@ -2339,14 +2314,12 @@ function uniqueName (base) {
 
 function selectPreset (name, apply) {
     presetState.current = name;
-    ui7.preset = name;
-    ui7.presetName = name;
     if (apply) {
         const values = isBuiltin(name) ? BUILTIN_PRESETS[name] : (findUserPreset(name) || {}).values;
         applyValues(values || {}, true);
     }
     saveStoredPresets();
-    rebuildPresetDropdown();
+    refreshPresetList();
 }
 
 function presetSave () {
@@ -2378,22 +2351,35 @@ function presetClone () {
 
 function presetRename (newName) {
     newName = safeName(newName, '');
-    if (!newName || newName === presetState.current) { ui7.presetName = presetState.current; refreshGUI(); return; }
+    if (!newName || newName === presetState.current) return;
     if (isBuiltin(presetState.current)) {
-        ui7.presetName = presetState.current;
-        refreshGUI();
-        showToast('Built-in presets can’t be renamed · clone it first');
+        showToast('Built-in presets can’t be renamed · duplicate it first');
         return;
     }
     if (presetNames().indexOf(newName) !== -1) {
-        ui7.presetName = presetState.current;
-        refreshGUI();
         showToast('A preset called ' + newName + ' already exists');
         return;
     }
     findUserPreset(presetState.current).name = newName;
     selectPreset(newName, false);
     showToast('Renamed to ' + newName);
+}
+
+function presetRenamePrompt () {
+    if (isBuiltin(presetState.current)) {
+        showToast('Built-in presets can’t be renamed · duplicate it first');
+        return;
+    }
+    openModal({
+        title: 'Rename preset',
+        input: presetState.current,
+        singleLine: true,
+        label: 'Preset name',
+        buttons: [
+            { label: 'Cancel' },
+            { label: 'Rename', primary: true, action: presetRename },
+        ],
+    });
 }
 
 function presetDelete () {
@@ -2419,24 +2405,31 @@ function presetDelete () {
 function presetExport () {
     const name = presetState.current;
     const json = JSON.stringify({ app: 'RIPPL Studio', version: 1, name, values: snapshotValues() }, null, 2);
+    const filename = (name.replace(/[^\w\- ]+/g, '').trim() || 'preset') + '.rippl.json';
+    const file = () => new Blob([json], { type: 'application/json' });
     const buttons = [{ label: 'Close' }];
-    if (navigator.share)
-        buttons.push({ label: 'Share', action: () => { navigator.share({ title: 'RIPPL Studio preset · ' + name, text: json }).catch(() => {}); } });
-    buttons.push({ label: 'Download', action: () => downloadText(name.replace(/[^\w\- ]+/g, '') + '.rippl.json', json) });
+    if (platform.canShare())
+        buttons.push({ label: 'Share', action: () => {
+            platform.shareFile(file(), filename, 'RIPPL Studio preset · ' + name)
+                .catch(() => showToast('Couldn’t share the preset · try Copy instead'));
+        } });
+    if (!platform.isNative)
+        buttons.push({ label: 'Download', action: () => downloadText(filename, json) });
     buttons.push({ label: 'Copy', primary: true, action: () => copyText(json) });
-    openModal({ title: 'Export preset', text: 'Share this with anyone using RIPPL Studio. They can bring it in with Load preset.', input: json, readOnly: true, buttons });
+    openModal({ title: 'Share preset', text: 'Send this to anyone using RIPPL Studio. They can bring it in with Import.', input: json, readOnly: true, label: 'Preset data', buttons });
 }
 
 function presetImport () {
     openModal({
-        title: 'Load preset',
+        title: 'Import preset',
         text: 'Paste a preset someone shared with you, or choose a .json file.',
         input: '',
         placeholder: '{ "app": "RIPPL Studio", ... }',
+        label: 'Preset data',
         file: true,
         buttons: [
             { label: 'Cancel' },
-            { label: 'Load', primary: true, keepOpen: true, action: (text) => importPresetText(text) },
+            { label: 'Import', primary: true, keepOpen: true, action: (text) => importPresetText(text) },
         ],
     });
 }
@@ -2458,7 +2451,7 @@ function importPresetText (text) {
     presetState.user.push({ name, values });
     closeModal();
     selectPreset(name, true);
-    showToast('Loaded ' + name);
+    showToast('Imported ' + name);
 }
 
 function resetSimulation () {
@@ -2550,11 +2543,14 @@ function toggleFullscreen () {
 
 function showWallpaperInfo () {
     openModal({
-        title: 'Live wallpaper',
-        text: 'A web page can’t install itself as an Android live wallpaper; that needs a native app. ' +
-              'For a wallpaper-like screen: turn on Splashes or Auto-play, tap Fullscreen, and keep the screen on. ' +
-              'Your current preset is kept the next time you open RIPPL Studio on this device.',
-        buttons: [{ label: 'Go fullscreen', action: toggleFullscreen }, { label: 'OK', primary: true }],
+        title: 'Use as a wallpaper',
+        text: 'A true Android live wallpaper is planned for a later release. Until then, two options: ' +
+              'save an image and set it as your wallpaper from your gallery, or for a living display turn on ' +
+              '“Gentle automatic splashes” and “Keep the screen on”, then hide the controls.',
+        buttons: [
+            { label: 'Hide the controls', action: () => window.RipplUI.setHidden(true) },
+            { label: 'OK', primary: true },
+        ],
     });
 }
 
@@ -2609,6 +2605,7 @@ function downloadText (filename, text) {
 
 let modalButtons = [];
 let modalReturnFocus = null;
+let modalSingleLine = false;
 
 function openModal (opts) {
     const m = document.getElementById('modal');
@@ -2621,6 +2618,10 @@ function openModal (opts) {
     input.value = opts.input || '';
     input.readOnly = !!opts.readOnly;
     input.placeholder = opts.placeholder || '';
+    input.classList.toggle('single', !!opts.singleLine);
+    input.rows = opts.singleLine ? 1 : 5;
+    input.setAttribute('aria-label', opts.label || opts.title || 'Text');
+    modalSingleLine = !!opts.singleLine;
     const file = document.getElementById('modal-file');
     file.hidden = !opts.file;
     file.value = '';
@@ -2674,6 +2675,13 @@ function modalOpen () {
         if (!modalOpen()) return;
         if (e.key === 'Escape') {
             closeModal();
+            return;
+        }
+        if (e.key === 'Enter' && modalSingleLine && e.target && e.target.id === 'modal-input') {
+            // A one-line field: Enter confirms instead of adding a new line
+            e.preventDefault();
+            const primary = m.querySelector('.modal-btn.primary');
+            if (primary) primary.click();
             return;
         }
         if (e.key === 'Tab') {
@@ -2883,158 +2891,468 @@ function applyBackgroundBlur () {
     copyProgram.bind();
     gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
     blit(bgBlurFBO);
-    blur(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
+    blurTarget(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
 }
 
-// ---------- Control panel ----------
+// ---------- Interface ----------
+// Every setting is described here as plain data; ui.js turns the description into touch controls.
 
-const ICONS = {
-    logo:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5',
-    sparkle:   'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
-    pause:     'M8 5v14 M16 5v14',
-    play:      'M7 4.5l12 7.5-12 7.5z',
-    clear:     'M4 15l8.5-8.5 6 6L13 18H7z M10 9l6 6 M13 21h7',
-    drop:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
-    palette:   'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.4-1.9-.3-1 .3-2.1 1.4-2.1H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z M7.5 11h.01 M10.5 7h.01 M15.5 7.5h.01',
-    wave:      'M3 12c2.5-5 5.5-5 8 0s5.5 5 8 0 M3 17c2.5-3 5.5-3 8 0s5.5 3 8 0 M3 7c2.5-3 5.5-3 8 0s5.5 3 8 0',
-    vortex:    'M12 12a1.5 1.5 0 1 1 1.5 1.5 M13.5 13.5A4 4 0 1 1 16 9 M16 9a7 7 0 1 1-9.5 9',
-    particles: 'M5 7h.01 M12 4.5h.01 M19 8h.01 M8 13h.01 M15 12h.01 M19 17h.01 M11 19h.01 M4 18h.01',
-    undo:      'M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
-    redo:      'M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
-    camera:    'M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
-    expand:    'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
-    presets:   'M6 4h12v17l-6-4-6 4z',
-    scene:     'M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M3 12c0-3 4-5.5 9-5.5s9 2.5 9 5.5-4 5.5-9 5.5S3 15 3 12z M12 3v2 M12 19v2',
-    touch:     'M9 11V5a1.5 1.5 0 0 1 3 0v6 M12 10V8.5a1.5 1.5 0 0 1 3 0V11 M15 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-4.8-2.4L4 15a1.5 1.5 0 0 1 2.3-1.9L9 15',
-    look:      'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
-    light:     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M12 2v2 M12 20v2 M2 12h2 M20 12h2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4',
-    bulb:      'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z',
-    filters:   'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 3l3 7 M21 12l-7 1 M12 21l-3-7 M3 12l7-1',
-    layers:    'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
-    physics:   'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
-    fluid:     'M3 10c2.5-4 5.5-4 8 0s5.5 4 8 0 M3 16c2.5-4 5.5-4 8 0s5.5 4 8 0',
-    forces:    'M3 8h11a3 3 0 1 0-3-3 M3 12h15a3 3 0 1 1-3 3 M3 16h7',
-    edges:     'M4 4h16v16H4z M8 8h8v8H8z',
-    text:      'M5 6V4h14v2 M12 4v16 M9 20h6',
-    system:    'M4 7h10 M18 7h2 M4 17h4 M12 17h8 M14 5v4 M8 15v4',
-    gauge:     'M4 17a8 8 0 1 1 16 0 M12 17l4-5',
+const platform = window.RipplNative;
+
+// ---------- Device settings (kept on this device, never part of a preset) ----------
+
+const CAPTURE_SIZES = { 'Standard (720p)': 720, 'High (1080p)': 1080, 'Maximum (1440p)': 1440 };
+const SIM_RESOLUTIONS = { '32': 32, '64': 64, '128': 128, '256': 256 };
+const deviceSettings = { HAPTICS: true, KEEP_AWAKE: false };
+const DEVICE_CHOICES = {
+    PERFORMANCE_MODE: Object.keys(PERFORMANCE_MODES),
+    FPS_LIMIT: Object.keys(FPS_LIMITS),
+    EFFECT_QUALITY: EFFECT_NAMES,
+    PARTICLE_LIMIT: Object.keys(PARTICLE_AMOUNTS),
+    DYE_RESOLUTION: Object.values(QUALITY_LEVELS),
+    SIM_RESOLUTION: Object.values(SIM_RESOLUTIONS),
+    CAPTURE_RESOLUTION: Object.values(CAPTURE_SIZES),
+};
+const DEVICE_KEYS = Object.keys(DEVICE_CHOICES).concat(['RENDER_SCALE', 'ADAPTIVE_QUALITY', 'BATTERY_SAVER']);
+const deviceStore = { saved: null, timer: 0 };
+
+function deviceSnapshot () {
+    const out = { HAPTICS: deviceSettings.HAPTICS, KEEP_AWAKE: deviceSettings.KEEP_AWAKE };
+    DEVICE_KEYS.forEach(k => { out[k] = config[k]; });
+    return JSON.stringify(out);
+}
+
+function loadDeviceSettings () {
+    let stored = null;
+    try { stored = JSON.parse(storeGet('rippl.device') || 'null'); } catch (e) { /* damaged: use the defaults */ }
+    if (stored && typeof stored === 'object') {
+        DEVICE_KEYS.forEach(k => {
+            const v = stored[k];
+            if (typeof v !== typeof config[k]) return;
+            if (DEVICE_CHOICES[k] && DEVICE_CHOICES[k].indexOf(v) === -1) return;
+            if (typeof v === 'number' && !(v >= 0 && v <= 4096)) return;
+            // Devices without smooth texture filtering stay on the safe quality level
+            if (k === 'DYE_RESOLUTION' && !ext.supportLinearFiltering) return;
+            config[k] = v;
+        });
+        if (typeof stored.HAPTICS === 'boolean') deviceSettings.HAPTICS = stored.HAPTICS;
+        if (typeof stored.KEEP_AWAKE === 'boolean') deviceSettings.KEEP_AWAKE = stored.KEEP_AWAKE;
+    }
+    platform.setHaptics(deviceSettings.HAPTICS);
+    if (deviceSettings.KEEP_AWAKE) platform.keepAwake(true);
+    deviceStore.saved = deviceSnapshot();
+}
+
+// Saves device settings shortly after they change
+function persistDeviceSettings (dt) {
+    deviceStore.timer += dt;
+    if (deviceStore.timer < 1) return;
+    deviceStore.timer = 0;
+    const now = deviceSnapshot();
+    if (now === deviceStore.saved) return;
+    deviceStore.saved = now;
+    storeSet('rippl.device', now);
+}
+
+function setKeepAwake (on) {
+    deviceSettings.KEEP_AWAKE = on;
+    platform.keepAwake(on).then(ok => {
+        if (ok || !on) return;
+        deviceSettings.KEEP_AWAKE = false;
+        showToast('This device can’t keep the screen on from here');
+        refreshGUI();
+    });
+}
+
+// ---------- Control descriptions ----------
+
+const ctl = {
+    toggle: (key, label, after, extra) => Object.assign({
+        type: 'toggle', label,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }, extra),
+    slider: (key, label, extra) => Object.assign({
+        type: 'slider', label,
+        get: () => config[key],
+        set: v => { config[key] = v; },
+    }, extra),
+    // A 0-100% slider mapped onto a tuned engine value (see PCT)
+    pct: (key, label, extra) => Object.assign({
+        type: 'slider', label,
+        get: () => Math.round(Math.min(100, Math.max(0, PCT[key].from(config[PCT[key].cfg])))),
+        set: v => { config[PCT[key].cfg] = PCT[key].to(v); },
+    }, extra),
+    select: (key, label, options, after, extra) => Object.assign({
+        type: 'select', label, options,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }, extra),
+    color: (key, label, after) => ({
+        type: 'color', label,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }),
+    action: (label, run, extra) => Object.assign({ type: 'action', label, run }, extra),
+    heading: label => ({ type: 'heading', label }),
+    note: label => ({ type: 'note', label }),
 };
 
-function svgIcon (name) {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ICONS[name] + '"/></svg>';
+const shownWhen = (key, control) => Object.assign(control, { visible: () => !!config[key] });
+const centered = (low, high) => v => v === 50 ? 'Neutral' : (v < 50 ? low : high) + ' ' + Math.abs(v - 50) * 2 + '%';
+
+function paletteSwatch (name) {
+    const colors = PALETTES[name] || ['#ff3b3b', '#ffd23b', '#3bff7a', '#3bb8ff', '#b03bff'];
+    return 'conic-gradient(' + colors.concat(colors[0]).join(', ') + ')';
 }
 
-const QUICK_ACTIONS = [
-    { id: 'random',    label: 'Random',    title: 'Randomize the look (R)',     icon: 'sparkle', run: randomizeConfig },
-    { id: 'freeze',    label: 'Freeze',    title: 'Freeze / resume (F)',        icon: 'pause',   run: toggleFreeze, on: () => config.PAUSED },
-    { id: 'splash',    label: 'Splash',    title: 'Random splashes (Space)',    icon: 'drop',    run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
-    { id: 'clear',     label: 'Clear',     title: 'Clear the fluid',            icon: 'clear',   run: () => { clearFluid(); showToast('Cleared'); } },
-    { id: 'palette',   label: 'Palette',   title: 'Next palette (C)',           icon: 'palette', run: cyclePalette },
-    { id: 'autoplay',  label: 'Auto-play', title: 'Auto-play (A)',              icon: 'wave',    run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
-    { id: 'vortex',    label: 'Vortex',    title: 'Vortex (V)',                 icon: 'vortex',  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
-    { id: 'particles', label: 'Particles', title: 'Particles (O)',              icon: 'particles', run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
-    { id: 'undo',      label: 'Undo',      title: 'Undo (Ctrl+Z)',              icon: 'undo',    run: undo },
-    { id: 'redo',      label: 'Redo',      title: 'Redo (Ctrl+Shift+Z)',        icon: 'redo',    run: redo },
-    { id: 'shot',      label: 'Capture',   title: 'Save a screenshot',          icon: 'camera',  run: captureScreenshot },
-    { id: 'full',      label: 'Fullscreen', title: 'Fullscreen',                icon: 'expand',  run: toggleFullscreen },
-];
-
-const panel = { header: null, sub: null, fps: null, quick: {}, shown: {} };
-
-function setPanelOpen (open) {
-    if (!guiRoot) return;
-    if (open) guiRoot.open(); else guiRoot.close();
-    if (guiRoot.domElement && guiRoot.domElement.classList) guiRoot.domElement.classList.toggle('ff-collapsed', !open);
-    if (panel.header) panel.header.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) refreshGUI();
+function backgroundSwatch (name) {
+    if (name === 'Transparent') return 'repeating-conic-gradient(#3a3a44 0 25%, #1c1c24 0 50%) 0 0 / 16px 16px';
+    if (name === 'Custom') return 'linear-gradient(135deg, #8b5cf6, #22d3ee, #f472b6)';
+    const b = BACKGROUNDS[name];
+    return 'linear-gradient(' + b[0] + ', ' + b[1] + ')';
 }
 
-// Header (brand, current preset, live fps) and the quick-action grid sit above the sections
-function buildPanelChrome (gui) {
-    const root = gui.domElement;
-    if (!root || !root.insertBefore || !document.createElement) return;
-
-    const header = document.createElement('button');
-    header.type = 'button';
-    header.className = 'ff-header';
-    header.setAttribute('aria-label', 'Show or hide the controls');
-    header.innerHTML =
-        '<span class="ff-logo">' + svgIcon('logo') + '</span>' +
-        '<span class="ff-titles"><span class="ff-title">RIPPL STUDIO</span><span class="ff-sub"></span></span>' +
-        '<span class="ff-fps" aria-hidden="true"></span>' +
-        '<span class="ff-chev" aria-hidden="true"></span>';
-    header.addEventListener('click', () => setPanelOpen(gui.closed));
-
-    const quick = document.createElement('div');
-    quick.className = 'ff-quick';
-    quick.setAttribute('role', 'toolbar');
-    quick.setAttribute('aria-label', 'Quick actions');
-    QUICK_ACTIONS.forEach(a => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'ff-q';
-        b.title = a.title;
-        b.setAttribute('aria-label', a.title);
-        if (a.on) b.setAttribute('aria-pressed', 'false');
-        b.innerHTML = svgIcon(a.icon) + '<span>' + a.label + '</span>';
-        b.addEventListener('click', () => {
-            a.run();
-            refreshGUI();
-            syncTopMenu(true);
-        });
-        quick.appendChild(b);
-        panel.quick[a.id] = b;
-    });
-
-    root.insertBefore(quick, root.firstChild);
-    root.insertBefore(header, root.firstChild);
-    panel.header = header;
-    panel.sub = header.querySelector('.ff-sub');
-    panel.fps = header.querySelector('.ff-fps');
-}
-
-// Adds an icon to a section title
-function decorateFolder (folder, icon) {
-    const ul = folder.__ul;
-    const title = ul && ul.querySelector && ul.querySelector('li.title');
-    if (!title || !document.createElement) return folder;
-    const span = document.createElement('span');
-    span.className = 'ff-ico';
-    span.innerHTML = svgIcon(icon);
-    title.insertBefore(span, title.firstChild);
-    return folder;
-}
-
-function section (parent, name, icon) {
-    return decorateFolder(parent.addFolder(name), icon);
-}
-
-// Keeps the header and the quick-action buttons in step with the app
-function syncTopMenu (force) {
-    if (!panel.header) return;
-    QUICK_ACTIONS.forEach(a => {
-        if (!a.on) return;
-        const on = !!a.on();
-        if (!force && panel.shown[a.id] === on) return;
-        panel.shown[a.id] = on;
-        const b = panel.quick[a.id];
-        b.classList.toggle('on', on);
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-        if (a.id === 'freeze') b.innerHTML = svgIcon(on ? 'play' : 'pause') + '<span>' + (on ? 'Resume' : 'Freeze') + '</span>';
-    });
-    const sub = presetState.current + ' · ' + config.SIM_MODE;
-    if (panel.shown.sub !== sub) {
-        panel.shown.sub = sub;
-        panel.sub.textContent = sub;
+// A small picture of a preset, built from its palette and background
+function presetPreview (name) {
+    const values = (isBuiltin(name) ? BUILTIN_PRESETS[name] : (findUserPreset(name) || {}).values) || {};
+    const colors = PALETTES[values.PALETTE] || ['#ff3b3b', '#ffd23b', '#3bff7a', '#3bb8ff', '#b03bff'];
+    let bg = BACKGROUNDS[values.BACKGROUND || 'Black'];
+    if (values.BACKGROUND === 'Custom' && values.BACK_COLOR) {
+        const c = 'rgb(' + [values.BACK_COLOR.r, values.BACK_COLOR.g, values.BACK_COLOR.b].map(Math.round).join(', ') + ')';
+        bg = [c, c];
     }
-    const fps = perf.fps + ' fps';
-    if (panel.shown.fps !== fps) {
-        panel.shown.fps = fps;
-        panel.fps.textContent = fps;
-    }
+    if (!bg) bg = ['#101014', '#000000'];
+    return 'radial-gradient(circle at 28% 38%, ' + colors[0] + ' 0, transparent 44%), ' +
+           'radial-gradient(circle at 74% 56%, ' + colors[2] + ' 0, transparent 46%), ' +
+           'radial-gradient(circle at 50% 88%, ' + colors[4] + ' 0, transparent 40%), ' +
+           'linear-gradient(' + bg[0] + ', ' + bg[1] + ')';
 }
 
-startGUI();
+const MIT_NOTICE = [
+    'MIT License',
+    '',
+    'Copyright (c) 2017 Pavel Dobryakov',
+    '',
+    'Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated ' +
+    'documentation files (the "Software"), to deal in the Software without restriction, including without limitation ' +
+    'the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and ' +
+    'to permit persons to whom the Software is furnished to do so, subject to the following conditions:',
+    '',
+    'The above copyright notice and this permission notice shall be included in all copies or substantial portions of ' +
+    'the Software.',
+    '',
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ' +
+    'THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE ' +
+    'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF ' +
+    'CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS ' +
+    'IN THE SOFTWARE.',
+].join('\n');
+
+function showAbout () {
+    openModal({
+        title: 'RIPPL Studio ' + APP_VERSION,
+        text: 'An interactive fluid simulation. Built on WebGL Fluid Simulation by Pavel Dobryakov, used under the MIT License below.',
+        input: MIT_NOTICE,
+        readOnly: true,
+        buttons: [{ label: 'Close', primary: true }],
+    });
+}
+
+function showPrivacy () {
+    openModal({
+        title: 'Privacy',
+        text: 'RIPPL Studio doesn’t collect, send or share any data. There are no accounts, ads or analytics. ' +
+              'Your presets and settings stay on this device, and images are saved or shared only when you ask.',
+        buttons: [{ label: 'OK', primary: true }],
+    });
+}
+
+function buildTabs () {
+    const scene = [
+        { type: 'quick', label: 'Quick actions', items: [
+            { label: 'Splash',     icon: 'drop',      title: 'Add random splashes (Space)', run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
+            { label: 'Clear',      icon: 'clear',     title: 'Clear the fluid',             run: () => { clearFluid(); showToast('Cleared'); } },
+            { label: 'Palette',    icon: 'palette',   title: 'Next palette (C)',            run: cyclePalette },
+            { label: 'Auto-play',  icon: 'wave',      title: 'Auto-play (A)',               run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
+            { label: 'Vortex',     icon: 'vortex',    title: 'Vortex (V)',                  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
+            { label: 'Particles',  icon: 'particles', title: 'Particles (O)',               run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
+            { label: 'Trails',     icon: 'physics',   title: 'Color trails (T)',            run: () => toggleMode('TRAILS', 'Color trails'), on: () => config.TRAILS },
+            { label: 'Blacklight', icon: 'sparkle',   title: 'Blacklight (B)',              run: () => toggleMode('BLACKLIGHT', 'Blacklight'), on: () => config.BLACKLIGHT },
+        ] },
+        ctl.select('SIM_MODE', 'Simulation mode', SIM_MODE_NAMES, null, {
+            chips: true,
+            set: v => { applySimMode(v); showToast('Mode · ' + v); },
+        }),
+        ctl.pct('SPEED', 'Speed', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.select('MIRROR_MODE', 'Mirror', MIRROR_MODES, v => { if (v !== 'None') config.KALEIDOSCOPE = false; }, { chips: true }),
+        ctl.toggle('KALEIDOSCOPE', 'Kaleidoscope', v => { if (v) config.MIRROR_MODE = 'None'; }),
+        shownWhen('KALEIDOSCOPE', ctl.select('KALEIDO_SEGMENTS', 'Segments', SEGMENT_CHOICES, null, { chips: true })),
+    ];
+
+    const touch = [
+        ctl.select('GESTURE', 'Gesture', GESTURE_MODES, null, { chips: true }),
+        ctl.select('INJECTION', 'Injection', INJECTION_MODES, null, { chips: true }),
+        ctl.pct('TOUCH_FORCE', 'Force', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.slider('TOUCH_RADIUS', 'Radius'),
+        ctl.slider('TOUCH_SENSITIVITY', 'Sensitivity'),
+        ctl.slider('TOUCH_ATTRACTION', 'Attraction'),
+        ctl.slider('TOUCH_REPULSION', 'Repulsion'),
+        ctl.slider('MULTI_TOUCH', 'Multi-touch strength'),
+        ctl.toggle('CONTINUOUS_DRAWING', 'Keep drawing while held still'),
+        ctl.toggle('RANDOM_INJECTION', 'Random color for each touch'),
+    ];
+
+    const color = [
+        ctl.select('PALETTE', 'Palette', PALETTE_NAMES, null, { swatch: paletteSwatch, set: v => setPalette(v, 1.2) }),
+        ctl.toggle('AUTO_TRANSITION', 'Change palette automatically'),
+        shownWhen('AUTO_TRANSITION', ctl.select('TRANSITION_TIME', 'Time per palette', TRANSITION_CHOICES, null, { chips: true })),
+        ctl.toggle('RAINBOW', 'Rainbow'),
+        shownWhen('RAINBOW', ctl.pct('RAINBOW_SPD', 'Rainbow speed')),
+        ctl.toggle('COLORFUL', 'Color cycling'),
+    ];
+
+    const lighting = [
+        ctl.toggle('SHADING', 'Shading'),
+        ctl.toggle('BLOOM', 'Bloom'),
+        shownWhen('BLOOM', ctl.pct('BLOOM_INT', 'Bloom intensity')),
+        shownWhen('BLOOM', ctl.pct('BLOOM_THR', 'Bloom threshold')),
+        ctl.slider('GLOW_INTENSITY', 'Glow'),
+        ctl.slider('GLOW_RADIUS', 'Glow radius'),
+        ctl.toggle('SUNRAYS', 'Sunrays'),
+        shownWhen('SUNRAYS', ctl.pct('SUNRAYS_W', 'Sunrays weight')),
+        ctl.toggle('FLARE', 'Lens flare'),
+        shownWhen('FLARE', ctl.select('FLARE_STYLE', 'Flare style', FLARE_STYLES)),
+        ctl.toggle('SPECULAR', 'Specular highlights'),
+        shownWhen('SPECULAR', ctl.select('SPECULAR_STYLE', 'Specular style', Object.keys(SPECULAR_STYLES))),
+        ctl.slider('REFLECTION', 'Reflection'),
+        ctl.slider('REFRACTION', 'Refraction'),
+        ctl.slider('DEPTH', 'Depth'),
+        ctl.slider('TRANSPARENCY', 'Transparency'),
+    ];
+
+    const blacklight = [
+        ctl.toggle('BLACKLIGHT', 'Blacklight'),
+        ctl.slider('BLACKLIGHT_INTENSITY', 'Intensity'),
+        ctl.slider('FLUORESCENCE', 'Fluorescence'),
+        ctl.select('UV_MODE', 'UV color', Object.keys(UV_MODES), null, { chips: true }),
+    ];
+
+    const filters = [
+        ctl.toggle('GAMMA', 'Tone mapping'),
+        shownWhen('GAMMA', ctl.select('GAMMA_MODE', 'Tone', GAMMA_MODES)),
+        ctl.slider('SATURATION', 'Saturation', { format: centered('Less', 'More') }),
+        ctl.slider('CONTRAST', 'Contrast', { format: centered('Less', 'More') }),
+        ctl.slider('COLOR_VARIATION', 'Color variation'),
+        ctl.slider('BLUR', 'Blur'),
+        ctl.slider('SHARPEN', 'Sharpen'),
+        ctl.slider('CHROMATIC_ABERRATION', 'Chromatic aberration'),
+        ctl.toggle('FRINGE', 'Lens fringe'),
+        ctl.toggle('NEON', 'Neon outlines'),
+        ctl.toggle('EMBOSS', 'Emboss'),
+        ctl.toggle('PIXELS', 'Pixelate'),
+        shownWhen('PIXELS', ctl.select('PIXEL_MODE', 'Pixel size', Object.keys(PIXEL_MODES))),
+        ctl.toggle('FILTER', 'Film look'),
+        ctl.toggle('INVERT', 'Invert'),
+        ctl.toggle('MOTION', 'Motion echoes'),
+        shownWhen('MOTION', ctl.select('MOTION_STYLE', 'Echo style', MOTION_STYLES)),
+        shownWhen('MOTION', ctl.slider('MOTION_INTENSITY', 'Echo strength')),
+        ctl.toggle('SHAKE', 'Shake', v => {
+            if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
+        }),
+        shownWhen('SHAKE', ctl.select('SHAKE_STYLE', 'Shake style', Object.keys(SHAKE_STYLES))),
+    ];
+
+    const background = [
+        ctl.select('BACKGROUND', 'Background', BACKGROUND_NAMES, null, { swatch: backgroundSwatch }),
+        ctl.color('BACK_COLOR', 'Custom color', () => { config.BACKGROUND = 'Custom'; }),
+        ctl.slider('BG_BRIGHTNESS', 'Brightness', { format: centered('Darker', 'Brighter') }),
+        ctl.slider('BG_BLUR', 'Blur'),
+        ctl.slider('BG_OPACITY', 'Opacity'),
+    ];
+
+    const fluid = [
+        ctl.pct('RADIUS', 'Splat radius'),
+        ctl.pct('DISSIPATION', 'Fade time', { format: v => fadeSeconds(v).toFixed(1) + ' s' }),
+        ctl.toggle('TRAILS', 'Color trails'),
+        ctl.slider('VISCOSITY', 'Viscosity'),
+        ctl.pct('VORTICITY', 'Vorticity'),
+        ctl.pct('DRAG', 'Drag'),
+        ctl.slider('FLOW_STRENGTH', 'Flow strength'),
+        ctl.select('PRESSURE_LEVEL', 'Pressure solver', Object.keys(PRESSURE_LEVELS)),
+        ctl.pct('PRESSURE_STR', 'Pressure strength'),
+    ];
+
+    const forces = [
+        ctl.slider('GRAVITY', 'Gravity'),
+        ctl.slider('BUOYANCY', 'Buoyancy', { format: centered('Sinks', 'Rises') }),
+        ctl.slider('TURBULENCE', 'Turbulence'),
+        ctl.slider('SWIRL', 'Swirl'),
+        ctl.slider('ELASTICITY', 'Elasticity'),
+        ctl.slider('RANDOMNESS', 'Randomness'),
+        ctl.select('FLOW_DIRECTION', 'Flow direction', Object.keys(FLOW_DIRECTIONS)),
+        ctl.slider('FLOW_SPEED', 'Flow speed'),
+        ctl.select('FORCE_FIELD', 'Force field', FORCE_FIELDS, null, { chips: true }),
+        ctl.slider('FIELD_STRENGTH', 'Field strength'),
+    ];
+
+    const edges = [
+        ctl.select('EDGE', 'Edges', EDGE_MODES, onEdgeChange),
+        ctl.select('CORNER', 'Corners', CORNER_MODES, null, { chips: true }),
+        ctl.slider('REPEL_STRENGTH', 'Repel strength'),
+        ctl.slider('REPEL_DISTANCE', 'Repel distance'),
+        ctl.slider('EDGE_BOUNCE', 'Bounce'),
+        ctl.slider('EDGE_FRICTION', 'Friction'),
+        ctl.slider('EDGE_SOFTNESS', 'Softness'),
+    ];
+
+    const parts = [
+        ctl.toggle('PARTICLES', 'Particles'),
+        ctl.select('PARTICLE_STYLE', 'Style', PARTICLE_STYLES, null, { chips: true }),
+        ctl.select('PARTICLE_AMOUNT', 'Amount', Object.keys(PARTICLE_AMOUNTS)),
+        ctl.select('PARTICLE_COLOR_MODE', 'Color mode', PARTICLE_COLOR_MODES),
+        Object.assign(ctl.color('PARTICLE_COLOR', 'Single color'), { visible: () => config.PARTICLE_COLOR_MODE === 'Single Color' }),
+        ctl.slider('PARTICLE_MIX', 'Mix with fluid', { format: v => v === 50 ? 'Both' : v < 50 ? 'Fluid ' + (100 - v) + '%' : 'Particles ' + v + '%' }),
+        ctl.slider('PARTICLE_INTENSITY', 'Brightness'),
+        ctl.slider('PARTICLE_SIZE', 'Size'),
+        ctl.slider('PARTICLE_LENGTH', 'Streak length'),
+        ctl.slider('PARTICLE_GLOW', 'Glow'),
+        ctl.slider('PARTICLE_SPEED', 'Speed'),
+        ctl.slider('PARTICLE_DENSITY', 'Density'),
+        ctl.slider('PARTICLE_SPREAD', 'Spread'),
+        ctl.slider('PARTICLE_FADE', 'Fade'),
+        ctl.slider('PARTICLE_TURBULENCE', 'Turbulence'),
+        ctl.slider('PARTICLE_ATTRACTION', 'Attraction'),
+        ctl.toggle('PARTICLE_COLLISION', 'Collision'),
+        ctl.toggle('PARTICLE_TRAILS', 'Trails'),
+    ];
+
+    const text = [
+        ctl.toggle('TEXT', 'Show text'),
+        ctl.action('Edit text', editText, { icon: 'edit' }),
+        ctl.select('TEXT_MODE', 'Mode', TEXT_MODES),
+        ctl.select('TEXT_FONT', 'Font', Object.keys(TEXT_FONTS)),
+        ctl.slider('TEXT_SIZE', 'Size'),
+        ctl.color('TEXT_COLOR', 'Color'),
+        ctl.slider('TEXT_OPACITY', 'Opacity'),
+        ctl.toggle('TEXT_OUTLINE', 'Outline'),
+        shownWhen('TEXT_OUTLINE', ctl.slider('TEXT_OUTLINE_THICKNESS', 'Outline width')),
+        ctl.toggle('TEXT_GLOW', 'Glow'),
+        shownWhen('TEXT_GLOW', ctl.slider('TEXT_GLOW_INTENSITY', 'Glow strength')),
+        ctl.slider('TEXT_X', 'Position across'),
+        ctl.slider('TEXT_Y', 'Position down'),
+        ctl.slider('TEXT_ROTATION', 'Rotation', { format: v => Math.round((v - 50) * 3.6) + '°' }),
+    ];
+
+    const performance = [
+        ctl.select('PERFORMANCE_MODE', 'Performance mode', Object.keys(PERFORMANCE_MODES), null, {
+            chips: true,
+            set: v => { applyPerformanceMode(v); showToast('Performance · ' + v); },
+        }),
+        ctl.select('DYE_RESOLUTION', 'Quality', QUALITY_LEVELS, initFramebuffers),
+        ctl.select('SIM_RESOLUTION', 'Simulation detail', SIM_RESOLUTIONS, initFramebuffers),
+        ctl.select('FPS_LIMIT', 'Frame rate limit', Object.keys(FPS_LIMITS)),
+        ctl.slider('RENDER_SCALE', 'Render scale'),
+        ctl.select('EFFECT_QUALITY', 'Effect quality', EFFECT_NAMES),
+        ctl.select('PARTICLE_LIMIT', 'Particle limit', Object.keys(PARTICLE_AMOUNTS)),
+        ctl.toggle('ADAPTIVE_QUALITY', 'Adaptive quality'),
+        ctl.toggle('BATTERY_SAVER', 'Battery saver'),
+    ];
+
+    const capture = [
+        ctl.action(platform.isNative ? 'Save image to gallery' : 'Save image', captureScreenshot, { icon: 'camera', primary: true }),
+        Object.assign(ctl.action('Share image', shareScreenshot, { icon: 'share' }), { visible: () => platform.canShare() }),
+        ctl.select('CAPTURE_RESOLUTION', 'Image size', CAPTURE_SIZES),
+        ctl.toggle('TRANSPARENT', 'Transparent background in images'),
+        ctl.heading('Ambient'),
+        ctl.toggle('SPLASHES', 'Gentle automatic splashes'),
+        ctl.toggle('WALLPAPER_CLEAR', 'Start fresh when you come back'),
+        ctl.action('Hide the controls', () => window.RipplUI.setHidden(true), { icon: 'hide' }),
+        Object.assign(ctl.action('Fullscreen', toggleFullscreen, { icon: 'expand' }), { visible: () => !platform.isNative }),
+        ctl.action('Use as a wallpaper', showWallpaperInfo, { icon: 'phone' }),
+    ];
+
+    const app = [
+        { type: 'toggle', label: 'Haptic feedback',
+          get: () => deviceSettings.HAPTICS,
+          set: v => { deviceSettings.HAPTICS = v; platform.setHaptics(v); } },
+        { type: 'toggle', label: 'Keep the screen on', get: () => deviceSettings.KEEP_AWAKE, set: setKeepAwake },
+        ctl.heading('About'),
+        ctl.action('About RIPPL Studio', showAbout, { icon: 'logo' }),
+        ctl.action('Privacy', showPrivacy, { icon: 'look' }),
+    ];
+
+    const one = controls => [{ id: 'main', label: '', controls }];
+    return [
+        { id: 'presets', label: 'Presets', icon: 'presets', custom: 'presets' },
+        { id: 'scene', label: 'Scene', icon: 'scene', sections: one(scene) },
+        { id: 'touch', label: 'Touch', icon: 'touch', sections: one(touch) },
+        { id: 'look', label: 'Look', icon: 'look', sections: [
+            { id: 'color', label: 'Color', controls: color },
+            { id: 'lighting', label: 'Lighting', controls: lighting },
+            { id: 'blacklight', label: 'Blacklight', controls: blacklight },
+            { id: 'filters', label: 'Filters', controls: filters },
+            { id: 'background', label: 'Background', controls: background },
+        ] },
+        { id: 'physics', label: 'Physics', icon: 'physics', sections: [
+            { id: 'fluid', label: 'Fluid', controls: fluid },
+            { id: 'forces', label: 'Forces', controls: forces },
+            { id: 'edges', label: 'Edges', controls: edges },
+        ] },
+        { id: 'particles', label: 'Particles', icon: 'particles', sections: one(parts) },
+        { id: 'text', label: 'Text', icon: 'text', sections: one(text) },
+        { id: 'system', label: 'System', icon: 'system', sections: [
+            { id: 'performance', label: 'Performance', controls: performance },
+            { id: 'capture', label: 'Capture', controls: capture },
+            { id: 'app', label: 'App', controls: app },
+        ] },
+    ];
+}
+
+function startUI () {
+    loadDeviceSettings();
+    const builtinNow = () => isBuiltin(presetState.current);
+    window.RipplUI.init({
+        title: 'RIPPL STUDIO',
+        startTab: 'scene',
+        tabs: buildTabs(),
+        dock: [
+            { label: 'Presets', icon: 'presets', title: 'Presets', run: () => window.RipplUI.open('presets') },
+            { label: 'Random',  icon: 'sparkle', title: 'Randomize the look (R)', run: randomizeConfig },
+            { label: 'Controls', icon: 'controls', title: 'Open the controls', main: true },
+            { label: () => config.PAUSED ? 'Resume' : 'Freeze', icon: () => config.PAUSED ? 'play' : 'pause',
+              title: 'Freeze or resume (F)', run: toggleFreeze, on: () => config.PAUSED },
+            { label: 'Capture', icon: 'camera', title: 'Save an image', run: captureScreenshot },
+        ],
+        headActions: [
+            { label: 'Undo', icon: 'undo', run: undo },
+            { label: 'Redo', icon: 'redo', run: redo },
+        ],
+        presets: {
+            names: presetNames,
+            current: () => presetState.current,
+            isBuiltin,
+            preview: presetPreview,
+            select: name => { selectPreset(name, true); showToast(name); },
+            actions: [
+                { label: 'Save this look', icon: 'save', run: presetSave, primary: true, wide: true },
+                { label: 'Rename', icon: 'edit', run: presetRenamePrompt, disabled: builtinNow },
+                { label: 'Duplicate', icon: 'copy', run: presetClone },
+                { label: 'Share', icon: 'share', run: presetExport },
+                { label: 'Import', icon: 'open', run: presetImport },
+                { label: 'New blank', icon: 'plus', run: presetNew },
+                { label: 'Delete', icon: 'trash', run: presetDelete, danger: true, disabled: builtinNow },
+                { label: 'Reset everything', icon: 'reset', run: resetSimulation, danger: true, wide: true },
+            ],
+        },
+        status: () => presetState.current + ' · ' + config.SIM_MODE + ' · ' + perf.fps + ' fps',
+        toast: showToast,
+        dialogOpen: modalOpen,
+        closeDialog: () => { if (!modalOpen()) return false; closeModal(); return true; },
+    });
+}
+
+startUI();
 
 function getWebGLContext (canvas) {
     const params = { alpha: true, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
@@ -3094,9 +3412,11 @@ function getWebGLContext (canvas) {
 function fatal (message) {
     const box = document.createElement('div');
     box.setAttribute('role', 'alert');
-    box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;' +
-        'background:#000;color:#eee;font:16px/1.5 system-ui,-apple-system,Roboto,sans-serif;text-align:center;z-index:30';
-    box.textContent = message + ' Try a recent version of Chrome, Firefox or Safari.';
+    box.className = 'rs-fatal';
+    const inApp = !!(window.RipplNative && window.RipplNative.isNative);
+    box.textContent = message + (inApp
+        ? ' Updating “Android System WebView” from the Play Store usually fixes this.'
+        : ' Try a recent version of Chrome, Firefox or Safari.');
     document.body.appendChild(box);
     throw new Error(message);
 }
@@ -3139,236 +3459,12 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
     return status == gl.FRAMEBUFFER_COMPLETE;
 }
 
-function startGUI () {
-    var gui = new dat.GUI({ width: 344, hideable: false });
-    guiRoot = gui;
-    buildPanelChrome(gui);
-
-    // Presets
-    let presets = section(gui, 'Presets', 'presets');
-    presetCtrl = presets.add(ui7, 'preset', presetNames()).name('preset').onChange(v => selectPreset(v, true));
-    presets.add(ui7, 'presetName').name('name').onFinishChange(presetRename);
-    presets.add({ fun: presetSave }, 'fun').name('Save preset');
-    presets.add({ fun: presetNew }, 'fun').name('New preset');
-    presets.add({ fun: presetClone }, 'fun').name('Duplicate');
-    presets.add({ fun: presetExport }, 'fun').name('Export / share');
-    presets.add({ fun: presetImport }, 'fun').name('Load from file or text');
-    let del = presets.add({ fun: presetDelete }, 'fun').name('Delete preset');
-    if (del.__li && del.__li.classList) del.__li.classList.add('ff-danger');
-    let reset = presets.add({ fun: resetSimulation }, 'fun').name('Reset everything');
-    if (reset.__li && reset.__li.classList) reset.__li.classList.add('ff-danger');
-
-    // Scene: what is happening on screen
-    let scene = section(gui, 'Scene', 'scene');
-    scene.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').onChange(v => {
-        applySimMode(v);
-        showToast('Mode · ' + v);
-    });
-    scene.add(config, 'AUTOPLAY').name('auto-play');
-    scene.add(config, 'VORTEX').name('vortex');
-    scene.add(config, 'KALEIDOSCOPE').name('kaleidoscope').onChange(v => {
-        if (v) config.MIRROR_MODE = 'None';
-        refreshGUI();
-    });
-    scene.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments')
-        .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
-    scene.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').onChange(v => {
-        if (v !== 'None') config.KALEIDOSCOPE = false;
-        refreshGUI();
-    });
-    addPct(scene, 'SPEED', 'speed');
-
-    // Touch: what your fingers do
-    let touch = section(gui, 'Touch', 'touch');
-    touch.add(config, 'GESTURE', GESTURE_MODES).name('gesture');
-    touch.add(config, 'INJECTION', INJECTION_MODES).name('injection');
-    addPct(touch, 'TOUCH_FORCE', 'force');
-    touch.add(config, 'TOUCH_RADIUS', 0, 100).step(1).name('radius');
-    touch.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('sensitivity');
-    touch.add(config, 'TOUCH_ATTRACTION', 0, 100).step(1).name('attraction');
-    touch.add(config, 'TOUCH_REPULSION', 0, 100).step(1).name('repulsion');
-    touch.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
-    touch.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
-    touch.add(config, 'RANDOM_INJECTION').name('random color per touch');
-
-    // Look: everything about color and light
-    let look = section(gui, 'Look', 'look');
-
-    let color = section(look, 'Color', 'palette');
-    color.add(config, 'PALETTE', PALETTE_NAMES).name('palette').onChange(v => setPalette(v, 1.2));
-    color.add(config, 'AUTO_TRANSITION').name('auto transitions');
-    color.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
-        .onChange(v => { config.TRANSITION_TIME = Number(v); });
-    color.add(config, 'RAINBOW').name('rainbow');
-    addPct(color, 'RAINBOW_SPD', 'rainbow speed');
-    color.add(config, 'COLORFUL').name('color cycling');
-
-    let lighting = section(look, 'Lighting', 'light');
-    lighting.add(config, 'SHADING').name('shading');
-    lighting.add(config, 'BLOOM').name('bloom');
-    addPct(lighting, 'BLOOM_INT', 'bloom intensity');
-    addPct(lighting, 'BLOOM_THR', 'bloom threshold');
-    lighting.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow');
-    lighting.add(config, 'GLOW_RADIUS', 0, 100).step(1).name('glow radius');
-    lighting.add(config, 'SUNRAYS').name('sunrays');
-    addPct(lighting, 'SUNRAYS_W', 'sunrays weight');
-    lighting.add(config, 'FLARE').name('lens flare');
-    lighting.add(config, 'FLARE_STYLE', FLARE_STYLES).name('flare style');
-    lighting.add(config, 'SPECULAR').name('specular');
-    lighting.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
-    lighting.add(config, 'REFLECTION', 0, 100).step(1).name('reflection');
-    lighting.add(config, 'REFRACTION', 0, 100).step(1).name('refraction');
-    lighting.add(config, 'DEPTH', 0, 100).step(1).name('depth');
-    lighting.add(config, 'TRANSPARENCY', 0, 100).step(1).name('transparency');
-
-    let blacklight = section(look, 'Blacklight', 'bulb');
-    blacklight.add(config, 'BLACKLIGHT').name('blacklight');
-    blacklight.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('intensity');
-    blacklight.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
-    blacklight.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color');
-
-    let filters = section(look, 'Filters', 'filters');
-    filters.add(config, 'GAMMA').name('tone mapping');
-    filters.add(config, 'GAMMA_MODE', GAMMA_MODES).name('tone');
-    filters.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
-    filters.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
-    filters.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
-    filters.add(config, 'BLUR', 0, 100).step(1).name('blur');
-    filters.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
-    filters.add(config, 'CHROMATIC_ABERRATION', 0, 100).step(1).name('chromatic aberration');
-    filters.add(config, 'FRINGE').name('lens fringe');
-    filters.add(config, 'NEON').name('neon outlines');
-    filters.add(config, 'EMBOSS').name('emboss');
-    filters.add(config, 'PIXELS').name('pixelate');
-    filters.add(config, 'PIXEL_MODE', Object.keys(PIXEL_MODES)).name('pixel size');
-    filters.add(config, 'FILTER').name('film look');
-    filters.add(config, 'INVERT').name('invert');
-    filters.add(config, 'MOTION').name('motion echoes');
-    filters.add(config, 'MOTION_STYLE', MOTION_STYLES).name('echo style');
-    filters.add(config, 'MOTION_INTENSITY', 0, 100).step(1).name('echo strength');
-    filters.add(config, 'SHAKE').name('shake').onChange(v => {
-        if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
-    });
-    filters.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
-
-    let background = section(look, 'Background', 'layers');
-    background.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background');
-    background.addColor(config, 'BACK_COLOR').name('custom color').onChange(() => {
-        config.BACKGROUND = 'Custom';
-        refreshGUI();
-    });
-    background.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness');
-    background.add(config, 'BG_BLUR', 0, 100).step(1).name('blur');
-    background.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity');
-
-    // Physics: how the fluid itself behaves
-    let physics = section(gui, 'Physics', 'physics');
-
-    let fluid = section(physics, 'Fluid', 'fluid');
-    fluid.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
-    fluid.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    addPct(fluid, 'RADIUS', 'splat radius');
-    addPct(fluid, 'DISSIPATION', 'dissipation');
-    fluid.add(config, 'TRAILS').name('color trails');
-    fluid.add(config, 'VISCOSITY', 0, 100).step(1).name('viscosity');
-    addPct(fluid, 'VORTICITY', 'vorticity');
-    addPct(fluid, 'DRAG', 'drag');
-    fluid.add(config, 'FLOW_STRENGTH', 0, 100).step(1).name('flow strength');
-    fluid.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure solver');
-    addPct(fluid, 'PRESSURE_STR', 'pressure strength');
-
-    let forces = section(physics, 'Forces', 'forces');
-    forces.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
-    forces.add(config, 'BUOYANCY', 0, 100).step(1).name('buoyancy (50 = none)');
-    forces.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
-    forces.add(config, 'SWIRL', 0, 100).step(1).name('swirl');
-    forces.add(config, 'ELASTICITY', 0, 100).step(1).name('elasticity');
-    forces.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
-    forces.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
-    forces.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
-    forces.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field');
-    forces.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
-
-    let edges = section(physics, 'Edges', 'edges');
-    edges.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
-    edges.add(config, 'CORNER', CORNER_MODES).name('corners');
-    edges.add(config, 'REPEL_STRENGTH', 0, 100).step(1).name('repel strength');
-    edges.add(config, 'REPEL_DISTANCE', 0, 100).step(1).name('repel distance');
-    edges.add(config, 'EDGE_BOUNCE', 0, 100).step(1).name('bounce');
-    edges.add(config, 'EDGE_FRICTION', 0, 100).step(1).name('friction');
-    edges.add(config, 'EDGE_SOFTNESS', 0, 100).step(1).name('softness');
-
-    // Particles
-    let parts = section(gui, 'Particles', 'particles');
-    parts.add(config, 'PARTICLES').name('particles');
-    parts.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style');
-    parts.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
-    parts.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
-    parts.addColor(config, 'PARTICLE_COLOR').name('single color');
-    parts.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix with fluid');
-    parts.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('brightness');
-    parts.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
-    parts.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('streak length');
-    parts.add(config, 'PARTICLE_GLOW', 0, 100).step(1).name('glow');
-    parts.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
-    parts.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
-    parts.add(config, 'PARTICLE_SPREAD', 0, 100).step(1).name('spread');
-    parts.add(config, 'PARTICLE_FADE', 0, 100).step(1).name('fade');
-    parts.add(config, 'PARTICLE_TURBULENCE', 0, 100).step(1).name('turbulence');
-    parts.add(config, 'PARTICLE_ATTRACTION', 0, 100).step(1).name('attraction');
-    parts.add(config, 'PARTICLE_COLLISION').name('collision');
-    parts.add(config, 'PARTICLE_TRAILS').name('trails');
-
-    // Text
-    let text = section(gui, 'Text', 'text');
-    text.add(config, 'TEXT').name('show text');
-    text.add({ fun: editText }, 'fun').name('Edit text');
-    text.add(config, 'TEXT_MODE', TEXT_MODES).name('mode');
-    text.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font');
-    text.add(config, 'TEXT_SIZE', 0, 100).step(1).name('size');
-    text.addColor(config, 'TEXT_COLOR').name('color');
-    text.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity');
-    text.add(config, 'TEXT_OUTLINE').name('outline');
-    text.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline width');
-    text.add(config, 'TEXT_GLOW').name('glow');
-    text.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow strength');
-    text.add(config, 'TEXT_X', 0, 100).step(1).name('position x');
-    text.add(config, 'TEXT_Y', 0, 100).step(1).name('position y');
-    text.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)');
-
-    // System: device settings, capture and wallpaper
-    let system = section(gui, 'System', 'system');
-
-    let perfFolder = section(system, 'Performance', 'gauge');
-    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('mode').onChange(v => {
-        applyPerformanceMode(v);
-        showToast('Performance · ' + v);
-    });
-    perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit');
-    perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale');
-    perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality');
-    perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit');
-    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality');
-    perfFolder.add(config, 'BATTERY_SAVER').name('battery saver');
-
-    let capture = section(system, 'Capture & Wallpaper', 'camera');
-    capture.add({ fun: captureScreenshot }, 'fun').name('Save screenshot');
-    capture.add(config, 'TRANSPARENT').name('transparent screenshots');
-    capture.add(config, 'SPLASHES').name('ambient splashes');
-    capture.add(config, 'WALLPAPER_CLEAR').name('fresh start on return');
-    capture.add({ fun: showWallpaperInfo }, 'fun').name('Use as wallpaper');
-
-    // Start with the everyday sections open
-    scene.open();
-    syncTopMenu(true);
-    setPanelOpen(!isMobile());
-}
-
 function isMobile () {
     return /Mobi|Android/i.test(navigator.userAgent);
 }
 
-function captureScreenshot () {
+// Renders the current frame at the chosen image size and hands back a PNG
+function captureImage () {
     let res = getResolution(config.CAPTURE_RESOLUTION);
     let target = createFBO(res.width, res.height, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
     render(target);
@@ -3379,8 +3475,41 @@ function captureScreenshot () {
     destroyFBO(target);
 
     let captureCanvas = textureToCanvas(texture, target.width, target.height);
-    let datauri = captureCanvas.toDataURL();
-    downloadURI('rippl.png', datauri);
+    return new Promise((resolve, reject) => {
+        captureCanvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('The image could not be created')), 'image/png');
+    });
+}
+
+function captureName () {
+    const d = new Date();
+    const two = n => ('0' + n).slice(-2);
+    return 'rippl-' + d.getFullYear() + two(d.getMonth() + 1) + two(d.getDate()) + '-' +
+           two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds()) + '.png';
+}
+
+let captureBusy = false;
+
+function exportImage (send, messages) {
+    if (captureBusy) return;
+    captureBusy = true;
+    captureImage()
+        .then(blob => send(blob, captureName()))
+        .then(result => { if (messages[result]) showToast(messages[result]); })
+        .catch(e => {
+            console.error(e);
+            showToast('Couldn’t save the image · try a smaller image size');
+        })
+        .then(() => { captureBusy = false; });
+}
+
+function captureScreenshot () {
+    exportImage((blob, name) => platform.saveImage(blob, name),
+        { saved: 'Saved to your gallery', downloaded: 'Image saved' });
+}
+
+function shareScreenshot () {
+    exportImage((blob, name) => platform.shareFile(blob, name, 'Made with RIPPL Studio'),
+        { downloaded: 'Image saved' });
 }
 
 function framebufferToTexture (target) {
@@ -3418,15 +3547,6 @@ function textureToCanvas (texture, width, height) {
     ctx.putImageData(imageData, 0, 0);
 
     return captureCanvas;
-}
-
-function downloadURI (filename, uri) {
-    let link = document.createElement('a');
-    link.download = filename;
-    link.href = uri;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
 }
 
 class Material {
@@ -4714,12 +4834,6 @@ const blit = (() => {
     return fn;
 })();
 
-function CHECK_FRAMEBUFFER_STATUS () {
-    let status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-    if (status != gl.FRAMEBUFFER_COMPLETE)
-        console.trace("Framebuffer error: " + status);
-}
-
 let dye;
 let velocity;
 let divergence;
@@ -5058,8 +5172,8 @@ function update (timestamp) {
     }
     updateParticles(dt);
     render(null, dt);
-    syncTopMenu();
-    refreshOpenPanel(frameDt);
+    persistDeviceSettings(frameSeconds);
+    refreshOpenPanel(frameSeconds);
     requestAnimationFrame(update);
 }
 
@@ -5264,7 +5378,7 @@ function render (target, dt) {
         applyBloom(dye.read, bloom);
     if (config.SUNRAYS) {
         applySunrays(dye.read, dye.write, sunrays);
-        blur(sunrays, sunraysTemp, 1);
+        blurTarget(sunrays, sunraysTemp, 1);
     }
     if (config.GLOW_INTENSITY > 0)
         applyGlow();
@@ -5422,7 +5536,7 @@ function applySunrays (source, mask, destination) {
     blit(destination);
 }
 
-function blur (target, temp, iterations) {
+function blurTarget (target, temp, iterations) {
     blurProgram.bind();
     for (let i = 0; i < iterations; i++) {
         gl.uniform2f(blurProgram.uniforms.texelSize, target.texelSizeX, 0.0);
@@ -5612,7 +5726,7 @@ window.addEventListener('blur', () => pointers.forEach(updatePointerUpData));
 
 window.addEventListener('keydown', e => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON')) return;
-    if (e.target && e.target.closest && e.target.closest('.dg')) return;
+    if (e.target && e.target.closest && e.target.closest('.rs-ui')) return;
     if (modalOpen()) return;
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault();
@@ -5642,7 +5756,7 @@ window.addEventListener('keydown', e => {
         case 'KeyT': toggleMode('TRAILS', 'Color trails'); break;
         case 'KeyN': toggleMode('RAINBOW', 'Rainbow'); break;
         case 'KeyI': toggleMode('RANDOM_INJECTION', 'Random color on touch'); break;
-        case 'KeyH': document.body.classList.toggle('hide-ui'); break;
+        case 'KeyH': window.RipplUI.toggleHidden(); break;
         case 'KeyG': cycleSetting('GESTURE', GESTURE_MODES, 'Gesture'); break;
         case 'KeyJ': cycleSetting('INJECTION', INJECTION_MODES, 'Injection'); break;
         case 'KeyX': cycleSetting('FORCE_FIELD', FORCE_FIELDS, 'Force field'); break;
