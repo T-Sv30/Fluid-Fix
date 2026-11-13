@@ -60,13 +60,12 @@ function fake2D () {
 }
 
 export function boot ({ native = false, storage = {} } = {}) {
-    const dom = new JSDOM(read('index.html'), {
-        url: 'https://localhost/',
-        runScripts: 'outside-only',
-        // A phone, so the tests exercise the mobile defaults on any machine
-        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36',
-    });
+    const dom = new JSDOM(read('index.html'), { url: 'https://localhost/', runScripts: 'outside-only' });
     const { window } = dom;
+    // A phone, so the tests exercise the mobile defaults on any machine
+    Object.defineProperty(window.navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36',
+    });
     const errors = [];
     window.addEventListener('error', e => errors.push(e.error || e.message));
     Object.keys(storage).forEach(k => window.localStorage.setItem(k, storage[k]));
@@ -113,6 +112,7 @@ export function boot ({ native = false, storage = {} } = {}) {
         nativeCalls,
         // Reads or runs anything in the app's global scope
         run: code => script(code, 'test-snippet.js'),
+        userAgent: () => window.navigator.userAgent,
         // Advances the app by n animation frames
         frames (n = 1) {
             for (let i = 0; i < n; i++) {

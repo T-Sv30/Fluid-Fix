@@ -31,6 +31,7 @@ describe('startup', () => {
         start();
         app.frames(8);
         assert.deepEqual(app.errors, []);
+        assert.match(app.userAgent(), /Pixel 8/, 'the harness pretends to be a phone on every machine');
         assert.deepEqual(app.$$('.rs-dock-btn').map(b => b.textContent), ['Presets', 'Random', 'Controls', 'Freeze', 'Capture']);
         assert.equal(app.$$('.rs-tab').length, 8);
     });
