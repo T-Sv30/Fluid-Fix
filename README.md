@@ -4,7 +4,7 @@ An interactive WebGL fluid simulation that runs in desktop and mobile browsers. 
 
 <img src="screenshot.jpg" width="880">
 
-**Live:** https://t-sv30.github.io/Fluid-Fix/
+**Live:** https://t-sv30.github.io/RIPPL-Studio/
 
 ## Features
 
