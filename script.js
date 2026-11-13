@@ -170,7 +170,7 @@ let config = {
     // Stage 7
     TEXT: false,
     TEXT_MODE: 'Paint',
-    TEXT_CONTENT: 'Fluid Fix',
+    TEXT_CONTENT: 'RIPPL Studio',
     TEXT_FONT: 'Sans',
     TEXT_SIZE: 40,
     TEXT_COLOR: { r: 255, g: 255, b: 255 },
@@ -190,7 +190,7 @@ let config = {
 }
 
 
-// Fluid Fix features: palettes, backgrounds, modes and emitters
+// RIPPL Studio features: palettes, backgrounds, modes and emitters
 
 const PALETTES = {
     'Classic': null, // full spectrum
@@ -2418,13 +2418,13 @@ function presetDelete () {
 
 function presetExport () {
     const name = presetState.current;
-    const json = JSON.stringify({ app: 'Fluid Fix', version: 1, name, values: snapshotValues() }, null, 2);
+    const json = JSON.stringify({ app: 'RIPPL Studio', version: 1, name, values: snapshotValues() }, null, 2);
     const buttons = [{ label: 'Close' }];
     if (navigator.share)
-        buttons.push({ label: 'Share', action: () => { navigator.share({ title: 'Fluid Fix preset · ' + name, text: json }).catch(() => {}); } });
-    buttons.push({ label: 'Download', action: () => downloadText(name.replace(/[^\w\- ]+/g, '') + '.fluidfix.json', json) });
+        buttons.push({ label: 'Share', action: () => { navigator.share({ title: 'RIPPL Studio preset · ' + name, text: json }).catch(() => {}); } });
+    buttons.push({ label: 'Download', action: () => downloadText(name.replace(/[^\w\- ]+/g, '') + '.rippl.json', json) });
     buttons.push({ label: 'Copy', primary: true, action: () => copyText(json) });
-    openModal({ title: 'Export preset', text: 'Share this with anyone using Fluid Fix. They can bring it in with Load preset.', input: json, readOnly: true, buttons });
+    openModal({ title: 'Export preset', text: 'Share this with anyone using RIPPL Studio. They can bring it in with Load preset.', input: json, readOnly: true, buttons });
 }
 
 function presetImport () {
@@ -2432,7 +2432,7 @@ function presetImport () {
         title: 'Load preset',
         text: 'Paste a preset someone shared with you, or choose a .json file.',
         input: '',
-        placeholder: '{ "app": "Fluid Fix", ... }',
+        placeholder: '{ "app": "RIPPL Studio", ... }',
         file: true,
         buttons: [
             { label: 'Cancel' },
@@ -2451,7 +2451,7 @@ function importPresetText (text) {
     }
     const values = cleanValues(data && data.values);
     if (!Object.keys(values).length) {
-        modalError('No Fluid Fix settings found in that text.');
+        modalError('No RIPPL Studio settings found in that text.');
         return;
     }
     const name = uniqueName(safeName(data.name, 'Imported'));
@@ -2553,7 +2553,7 @@ function showWallpaperInfo () {
         title: 'Live wallpaper',
         text: 'A web page can’t install itself as an Android live wallpaper; that needs a native app. ' +
               'For a wallpaper-like screen: turn on Splashes or Auto-play, tap Fullscreen, and keep the screen on. ' +
-              'Your current preset is kept the next time you open Fluid Fix on this device.',
+              'Your current preset is kept the next time you open RIPPL Studio on this device.',
         buttons: [{ label: 'Go fullscreen', action: toggleFullscreen }, { label: 'OK', primary: true }],
     });
 }
@@ -2960,7 +2960,7 @@ function buildPanelChrome (gui) {
     header.setAttribute('aria-label', 'Show or hide the controls');
     header.innerHTML =
         '<span class="ff-logo">' + svgIcon('logo') + '</span>' +
-        '<span class="ff-titles"><span class="ff-title">FLUID FIX</span><span class="ff-sub"></span></span>' +
+        '<span class="ff-titles"><span class="ff-title">RIPPL STUDIO</span><span class="ff-sub"></span></span>' +
         '<span class="ff-fps" aria-hidden="true"></span>' +
         '<span class="ff-chev" aria-hidden="true"></span>';
     header.addEventListener('click', () => setPanelOpen(gui.closed));
@@ -3044,7 +3044,7 @@ function getWebGLContext (canvas) {
     if (!isWebGL2)
         gl = canvas.getContext('webgl', params) || canvas.getContext('experimental-webgl', params);
     if (!gl)
-        fatal('Your browser or device doesn’t support WebGL, which Fluid Fix needs to draw the simulation.');
+        fatal('Your browser or device doesn’t support WebGL, which RIPPL Studio needs to draw the simulation.');
 
     let halfFloat;
     let supportLinearFiltering;
@@ -3055,7 +3055,7 @@ function getWebGLContext (canvas) {
         halfFloat = gl.getExtension('OES_texture_half_float');
         supportLinearFiltering = gl.getExtension('OES_texture_half_float_linear');
         if (!halfFloat)
-            fatal('This device’s graphics don’t support the floating-point textures Fluid Fix needs.');
+            fatal('This device’s graphics don’t support the floating-point textures RIPPL Studio needs.');
     }
 
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
@@ -3380,7 +3380,7 @@ function captureScreenshot () {
 
     let captureCanvas = textureToCanvas(texture, target.width, target.height);
     let datauri = captureCanvas.toDataURL();
-    downloadURI('fluid.png', datauri);
+    downloadURI('rippl.png', datauri);
 }
 
 function framebufferToTexture (target) {

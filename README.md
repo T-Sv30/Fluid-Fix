@@ -1,4 +1,4 @@
-# Fluid Fix
+# RIPPL Studio
 
 An interactive WebGL fluid simulation that runs in desktop and mobile browsers. Drag across the screen to stir the fluid; open the settings panel to change resolution, colors, bloom, sunrays and more.
 
