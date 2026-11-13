@@ -1,0 +1,74 @@
+name: Release
+
+# Push a tag like v1.0.0 to build the signed Android app and open a draft GitHub release.
+# Needs the signing secrets described in docs/RELEASING.md.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Build and attach the signed Android app
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      KEYSTORE_BASE64: ${{ secrets.RIPPL_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Check the signing key is configured
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Signing secrets are missing. See docs/RELEASING.md."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm run android:sync
+
+      - name: Build signed bundle and APK
+        working-directory: android
+        env:
+          RIPPL_KEYSTORE_PASSWORD: ${{ secrets.RIPPL_KEYSTORE_PASSWORD }}
+          RIPPL_KEY_ALIAS: ${{ secrets.RIPPL_KEY_ALIAS }}
+          RIPPL_KEY_PASSWORD: ${{ secrets.RIPPL_KEY_PASSWORD }}
+        run: |
+          export RIPPL_KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RIPPL_KEYSTORE_FILE"
+          ./gradlew bundleRelease assembleRelease --no-daemon
+          rm -f "$RIPPL_KEYSTORE_FILE"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/bundle/release/app-release.aab "rippl-studio-$GITHUB_REF_NAME.aab"
+          cp android/app/build/outputs/apk/release/app-release.apk "rippl-studio-$GITHUB_REF_NAME.apk"
+          gh release create "$GITHUB_REF_NAME" --draft --generate-notes --title "RIPPL Studio $GITHUB_REF_NAME" \
+            "rippl-studio-$GITHUB_REF_NAME.aab" "rippl-studio-$GITHUB_REF_NAME.apk"
