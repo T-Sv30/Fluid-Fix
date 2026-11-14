@@ -149,9 +149,19 @@
         call('SystemBars', on ? 'hide' : 'show', {}).catch(() => {});
     }
 
+    // ---------- Live wallpaper ----------
+
+    // Opens Android's screen for setting RIPPL Studio as the live wallpaper
+    function setLiveWallpaper () {
+        return call('RipplDevice', 'setLiveWallpaper');
+    }
+
     // ---------- Offline support in browsers ----------
 
-    if (!isNative && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    // The wallpaper page is shown inside other apps, which don't need it kept for offline use
+    const isWallpaper = /[?&]wallpaper=1(&|$)/.test(location.search);
+
+    if (!isNative && !isWallpaper && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').catch(() => { /* offline support is optional */ });
         });
@@ -167,5 +177,6 @@
         onBack,
         keepAwake,
         setImmersive,
+        setLiveWallpaper,
     };
 })();

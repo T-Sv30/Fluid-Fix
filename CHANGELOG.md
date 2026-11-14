@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- **Live wallpaper on Android**: System > Capture > "Set as live wallpaper" puts the look on
+  screen behind your home screen, moving, and it reacts to touch. It runs at 30 frames a second
+  with adaptive quality to go easy on the battery, and stops drawing while it is covered.
+- **Live desktop background on computers**: in a browser the same place offers "Use as a live
+  desktop background", which makes a link to the current look for wallpaper apps that show web
+  pages (for example Lively Wallpaper on Windows or Plash on a Mac).
+
 ## 1.0.2
 
 ### Changes

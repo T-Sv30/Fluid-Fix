@@ -467,6 +467,104 @@ describe('device settings', () => {
     });
 });
 
+describe('live wallpaper', () => {
+    const WALL = 'https://localhost/?wallpaper=1';
+    const stored = () => JSON.stringify(Object.fromEntries(Object.entries(app.window.localStorage)));
+
+    test('the wallpaper link carries the look, and opening it shows that look with no controls', () => {
+        start({ storage: WELCOMED });
+        app.run("config.CURL = 7; config.PALETTE = 'Fire'; config.TEXT_CONTENT = 'héllo ✨'");
+        const link = app.run('wallpaperLink()');
+        assert.match(link, /^https:\/\/localhost\/\?wallpaper=1#look=[\w-]+$/);
+        app.close();
+
+        start({ url: link });
+        assert.equal(app.run('config.CURL'), 7);
+        assert.equal(app.run('config.PALETTE'), 'Fire');
+        assert.equal(app.run('config.TEXT_CONTENT'), 'héllo ✨');
+        assert.ok(app.document.body.classList.contains('wallpaper-mode'), 'the stylesheet hides the interface');
+        assert.match(read('ui.css'), /body\.wallpaper-mode \.rs-ui[^{]*\{[^}]*display:\s*none/);
+        app.frames(3);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('a look in a link is cleaned like any shared preset', () => {
+        start({ storage: WELCOMED });
+        const bad = app.run("encodeLook({ CURL: 9999, PALETTE: '<img>', NOT_A_SETTING: 1, BLOOM: false })");
+        app.close();
+        start({ url: WALL + '#look=' + bad });
+        assert.equal(app.run('config.CURL'), 50, 'clamped');
+        assert.equal(app.run('config.PALETTE'), 'Classic', 'unknown choice dropped');
+        assert.equal(app.run('config.BLOOM'), false);
+        assert.equal(app.run("'NOT_A_SETTING' in config"), false);
+        app.close();
+        start({ url: WALL + '#look=%%%not-base64' });
+        assert.equal(app.run('config.PALETTE'), 'Classic', 'nonsense falls back to the default look');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('on the phone the wallpaper shows the look that was saved for it', () => {
+        start({ url: WALL, storage: { ...WELCOMED, 'rippl.wallpaperLook': JSON.stringify({ CURL: 3, PALETTE: 'Ocean' }), 'fluidfix.currentPreset': 'Neon Party' } });
+        assert.equal(app.run('config.CURL'), 3);
+        assert.equal(app.run('config.PALETTE'), 'Ocean', 'not the preset the app was last on');
+    });
+
+    test('the wallpaper keeps moving by itself and runs lighter than the app', () => {
+        start({ url: WALL, storage: { 'rippl.wallpaperLook': JSON.stringify({ SPLASHES: false, PAUSED: true }) } });
+        assert.equal(app.run('config.SPLASHES'), true);
+        assert.equal(app.run('config.PAUSED'), false);
+        assert.equal(app.run('config.FPS_LIMIT'), '30 FPS');
+        assert.equal(app.run('config.ADAPTIVE_QUALITY'), true);
+        assert.ok(app.run('config.RENDER_SCALE') <= 70);
+    });
+
+    test('the wallpaper never changes what the app has saved', () => {
+        const storage = { ...WELCOMED, 'rippl.wallpaperLook': JSON.stringify({ CURL: 3 }) };
+        start({ url: WALL, storage });
+        const before = stored();
+        app.run("config.CURL = 20; config.RENDER_SCALE = 40; presetSave(); storeSet('rippl.device', 'x')");
+        app.frames(10);
+        assert.equal(stored(), before);
+    });
+
+    test('it stops drawing while hidden and picks up a newly saved look when shown again', () => {
+        start({ url: WALL, storage: { 'rippl.wallpaperLook': JSON.stringify({ CURL: 3 }) } });
+        app.frames(2);
+        app.run('RipplWallpaper.setVisible(false)');
+        app.frames(2);
+        assert.equal(app.pendingFrames(), 0, 'no more frames are asked for');
+        app.window.localStorage.setItem('rippl.wallpaperLook', JSON.stringify({ CURL: 11 }));
+        app.run('RipplWallpaper.setVisible(true)');
+        assert.equal(app.pendingFrames(), 1);
+        assert.equal(app.run('config.CURL'), 11);
+        app.run('RipplWallpaper.setVisible(true)');
+        assert.equal(app.pendingFrames(), 1, 'showing twice does not double the frame rate');
+        app.frames(3);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('in the app, “Set as live wallpaper” saves the look and opens Android’s wallpaper screen', async () => {
+        start({ native: true, storage: WELCOMED });
+        app.run("config.CURL = 9");
+        openTab('System', 'Capture');
+        app.click(app.$$('.rs-body .rs-btn').find(b => b.textContent === 'Set as live wallpaper'));
+        await app.settle();
+        assert.equal(JSON.parse(app.window.localStorage.getItem('rippl.wallpaperLook')).CURL, 9);
+        assert.ok(app.nativeCalls.some(c => c.plugin === 'RipplDevice' && c.method === 'setLiveWallpaper'));
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('in a browser, it offers a link for a desktop wallpaper app', () => {
+        start({ storage: WELCOMED });
+        openTab('System', 'Capture');
+        app.click(app.$$('.rs-body .rs-btn').find(b => b.textContent === 'Use as a live desktop background'));
+        assert.equal(app.$('#modal').hidden, false);
+        assert.match(app.$('#modal-input').value, /\?wallpaper=1#look=/);
+        assert.deepEqual(app.$$('.modal-btn').map(b => b.textContent), ['Close', 'Preview', 'Copy link']);
+        assert.equal(app.nativeCalls.length, 0);
+    });
+});
+
 describe('menu look', () => {
     const css = read('ui.css');
 

@@ -60,8 +60,9 @@ function fake2D () {
     });
 }
 
-export function boot ({ native = false, storage = {}, deviceMemory, gl = {} } = {}) {
-    const dom = new JSDOM(read('index.html'), { url: 'https://localhost/', runScripts: 'outside-only' });
+// url: the address the app is opened at (the wallpaper page is the app with ?wallpaper=1)
+export function boot ({ native = false, storage = {}, deviceMemory, gl = {}, url = 'https://localhost/' } = {}) {
+    const dom = new JSDOM(read('index.html'), { url, runScripts: 'outside-only' });
     const { window } = dom;
     // A phone, so the tests exercise the mobile defaults on any machine
     Object.defineProperty(window.navigator, 'userAgent', {
@@ -120,6 +121,8 @@ export function boot ({ native = false, storage = {}, deviceMemory, gl = {} } = 
         run: code => script(code, 'test-snippet.js'),
         userAgent: () => window.navigator.userAgent,
         // Advances the app by n animation frames
+        // How many frames the app has asked for and not yet been given
+        pendingFrames: () => frames.length,
         frames (n = 1) {
             for (let i = 0; i < n; i++) {
                 clock += 300;

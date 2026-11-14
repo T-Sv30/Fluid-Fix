@@ -25,6 +25,21 @@
 
         </activity>
 
+        <!-- The live wallpaper. Only the system can start it: BIND_WALLPAPER is a permission
+             no ordinary app can hold. -->
+        <service
+            android:name=".RipplWallpaperService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/wallpaper" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -39,4 +54,7 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Phones without live wallpapers can still install the app; it just can't be one there -->
+    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
 </manifest>
