@@ -11,18 +11,19 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const read = name => readFileSync(join(ROOT, name), 'utf8');
 
 // Any ALL_CAPS property is a constant, any other property is a method with a harmless result
-function fakeGL (canvas) {
+// faults: { incompleteFramebuffers, linkFails } make the stand-in behave like a GPU that can't cope
+function fakeGL (canvas, faults = {}) {
     const constants = new Map();
     const methods = {
         getExtension: () => ({}),
         getParameter: () => 4096,
         getShaderParameter: () => true,
-        getProgramParameter: (program, name) => (name === constantOf('ACTIVE_UNIFORMS') ? 0 : true),
+        getProgramParameter: (program, name) => (name === constantOf('ACTIVE_UNIFORMS') ? 0 : !faults.linkFails),
         getShaderInfoLog: () => '',
         getProgramInfoLog: () => '',
         getError: () => 0,
         isContextLost: () => false,
-        checkFramebufferStatus: () => constantOf('FRAMEBUFFER_COMPLETE'),
+        checkFramebufferStatus: () => (faults.incompleteFramebuffers ? 0 : constantOf('FRAMEBUFFER_COMPLETE')),
         getUniformLocation: () => ({}),
         getActiveUniform: () => ({ name: 'u' }),
     };
@@ -59,7 +60,7 @@ function fake2D () {
     });
 }
 
-export function boot ({ native = false, storage = {}, deviceMemory } = {}) {
+export function boot ({ native = false, storage = {}, deviceMemory, gl = {} } = {}) {
     const dom = new JSDOM(read('index.html'), { url: 'https://localhost/', runScripts: 'outside-only' });
     const { window } = dom;
     // A phone, so the tests exercise the mobile defaults on any machine
@@ -79,7 +80,7 @@ export function boot ({ native = false, storage = {}, deviceMemory } = {}) {
     Object.defineProperty(window.HTMLCanvasElement.prototype, 'clientWidth', { get: () => 360 });
     Object.defineProperty(window.HTMLCanvasElement.prototype, 'clientHeight', { get: () => 720 });
     window.HTMLCanvasElement.prototype.getContext = function (type) {
-        if (type === 'webgl2') return (this.__gl = this.__gl || fakeGL(this));
+        if (type === 'webgl2') return (this.__gl = this.__gl || fakeGL(this, gl));
         if (type === '2d') return (this.__2d = this.__2d || fake2D());
         return null;
     };
@@ -103,7 +104,10 @@ export function boot ({ native = false, storage = {}, deviceMemory } = {}) {
     // Run as classic scripts, so top-level let/const stay reachable from later scripts
     const context = dom.getInternalVMContext();
     const script = (code, filename) => new vm.Script(code, { filename }).runInContext(context);
-    ['native.js', 'ui.js', 'script.js'].forEach(file => script(read(file), file));
+    // A script that stops with an error is reported like any other error, so tests can look at the page
+    ['native.js', 'ui.js', 'script.js'].forEach(file => {
+        try { script(read(file), file); } catch (e) { errors.push(e); }
+    });
 
     let clock = 1000;
     return {

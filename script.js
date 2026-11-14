@@ -966,6 +966,14 @@ function ensurePostFramebuffers () {
     historyFBO = createDoubleFBO(w, h, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
 }
 
+// Three screen-sized buffers are too much to keep around while no filter is on
+function releasePostFramebuffers () {
+    if (!frameFBO && !historyFBO) return;
+    destroyFBO(frameFBO);
+    destroyDoubleFBO(historyFBO);
+    frameFBO = historyFBO = null;
+}
+
 // Screen shake follows how hard you are stirring, with a little constant life
 function updateShake (dt) {
     let motion = 0;
@@ -2068,6 +2076,12 @@ function measureFrame (intervalMs) {
     perf.fps = Math.round(1000 / perf.emaInterval);
 }
 
+// True while the device is drawing clearly fewer frames than it is being asked for
+function framesAreSlow () {
+    const target = Math.min(effFpsLimit() || 60, 60);
+    return 1000 / perf.emaInterval < target * 0.85;
+}
+
 // Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones.
 // When a raise doesn't hold, the next one waits four times longer (up to two minutes), so a
 // device that can't carry a level stops bouncing in and out of it.
@@ -2082,7 +2096,7 @@ function updateAdaptive (dt) {
     perf.sinceRaise += dt;
     const target = Math.min(effFpsLimit() || 60, 60);
     const fps = 1000 / perf.emaInterval;
-    if (fps < target * 0.85) {
+    if (framesAreSlow()) {
         perf.slowTime += dt;
         perf.fastTime = 0;
         if (perf.slowTime > 1.5 && perf.adaptLevel < ADAPT_MAX) {
@@ -3792,6 +3806,8 @@ function getWebGLContext (canvas) {
         formatRG = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloatTexType);
         formatR = getSupportedFormat(gl, gl.RGBA, gl.RGBA, halfFloatTexType);
     }
+    if (!formatRGBA || !formatRG || !formatR)
+        fatal('This device’s graphics can’t draw into the floating-point textures RIPPL Studio needs.');
 
     return {
         gl,
@@ -3986,6 +4002,9 @@ class Program {
     constructor (vertexShader, fragmentShader) {
         this.uniforms = {};
         this.program = createProgram(vertexShader, fragmentShader);
+        // These are the simulation itself; without one of them nothing sensible can be drawn
+        if (!gl.getProgramParameter(this.program, gl.LINK_STATUS))
+            fatal('This device’s graphics couldn’t prepare the simulation.');
         this.uniforms = getUniforms(this.program);
     }
 
@@ -5580,7 +5599,7 @@ function update (timestamp) {
     applyRandomness(dt);
     if (!config.PAUSED && config.SPEED > 0) {
         const simDt = dt * config.SPEED;
-        const substeps = Math.max(1, Math.ceil(simDt / 0.0334 - 1e-6));
+        const substeps = simSubsteps(simDt);
         for (let i = 0; i < substeps; i++)
             step(simDt / substeps);
     }
@@ -5589,6 +5608,14 @@ function update (timestamp) {
     persistDeviceSettings(frameSeconds);
     refreshOpenPanel(frameSeconds);
     requestAnimationFrame(update);
+}
+
+// Long steps are split so the solver stays accurate at low frame rate limits. A device that is
+// already behind gets at most two passes: more would slow it further, which lengthens the next
+// step and asks for more passes again.
+function simSubsteps (simDt) {
+    const wanted = Math.max(1, Math.ceil(simDt / 0.0334 - 1e-6));
+    return framesAreSlow() ? Math.min(wanted, 2) : wanted;
 }
 
 function calcDeltaTime (now) {
@@ -5802,6 +5829,7 @@ function render (target, dt) {
     // Screen filters render the frame offscreen first, then post-process it
     const usePost = target == null && postKeywords().length > 0;
     if (usePost) ensurePostFramebuffers();
+    else if (target == null) releasePostFramebuffers();
     const dest = usePost ? frameFBO : target;
 
     if (target == null || !transparent) {

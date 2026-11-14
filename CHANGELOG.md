@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- A device whose graphics can't run the simulation now gets a message explaining so, instead of
+  a blank screen.
+- A device that is already dropping frames is no longer given extra solver passes on top.
+- The screen-sized buffers used by the screen filters are freed when the last filter is switched off.
+
 ## 1.0.0
 
 The first release as an app.
