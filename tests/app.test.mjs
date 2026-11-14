@@ -467,6 +467,30 @@ describe('device settings', () => {
     });
 });
 
+describe('menu look', () => {
+    const css = read('ui.css');
+
+    test('the menu is see-through, with a dark plate behind its text', () => {
+        const glass = css.match(/--rs-glass:\s*rgba\(([^)]+)\)/);
+        assert.ok(glass, 'the menu background has its own color');
+        assert.ok(parseFloat(glass[1].split(',')[3]) <= 0.2, 'and it is almost fully transparent');
+        const plate = css.match(/--rs-plate:\s*rgba\(([^)]+)\)/);
+        assert.ok(plate && parseFloat(plate[1].split(',')[3]) >= 0.6, 'text sits on a mostly opaque plate');
+        ['.rs-label', '.rs-heading', '.rs-value', '.rs-help', '.rs-tab'].forEach(sel =>
+            assert.match(css, new RegExp('\\' + sel + '[^{]*\\{[^}]*var\\(--rs-plate\\)'), sel + ' has the plate'));
+    });
+
+    test('every animation it uses is defined, and all of them stop for reduced motion', () => {
+        const used = new Set([...css.matchAll(/animation:\s*([a-z-]+)\s/g)].map(m => m[1]).filter(n => n !== 'none'));
+        const defined = new Set([...css.matchAll(/@keyframes\s+([a-z-]+)/g)].map(m => m[1]));
+        assert.ok(used.has('rs-turn') && used.has('rs-flow'), 'the border and the controls are animated');
+        used.forEach(name => assert.ok(defined.has(name), name + ' has keyframes'));
+        const reduced = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
+        assert.match(reduced, /::before/);
+        assert.match(reduced, /\.rs-range/);
+    });
+});
+
 describe('fluid color over its life', () => {
     const tints = () => JSON.parse(app.run('JSON.stringify(Array.from(ageColorTints()))'));
 

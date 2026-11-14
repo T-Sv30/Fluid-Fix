@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Changes
+- The menu is now almost see-through, so the fluid stays visible behind it; text and controls
+  sit on dark plates of their own to stay readable.
+- A live theme: a band of light travels around the menu's border, and the same colors flow
+  through sliders, switches and selected buttons. It stops when "reduce motion" is set on the device.
 - **Change color with age** (Color > Palette): choose up to eight colors and the fluid shifts
   through them as it gets older, over a time you set from 1 to 30 seconds. **Saturation** sets
   how strong the colors are and **Change sharpness** how suddenly each one gives way to the next.

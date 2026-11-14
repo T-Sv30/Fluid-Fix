@@ -1227,3 +1227,205 @@ body.hide-ui .rs-sheet {
         transition-duration: 0.01ms !important;
     }
 }
+
+/* ---------- See-through menu ----------
+   The menu is almost clear so the fluid shows through it. Text and controls sit on dark
+   plates of their own, so they stay readable over any color. */
+
+:root {
+    --rs-glass: rgba(10, 10, 18, 0.14);
+    --rs-plate: rgba(9, 9, 15, 0.74);
+    --rs-track: rgba(44, 44, 62, 0.92);
+    /* Starts and ends on the same color, so it can slide sideways forever without a seam */
+    --rs-flow: linear-gradient(90deg, #8b5cf6, #22d3ee 33%, #f472b6 66%, #8b5cf6);
+}
+
+.rs-sheet {
+    border-top-color: transparent;
+    background: var(--rs-glass);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+
+.rs-label,
+.rs-value,
+.rs-heading,
+.rs-note,
+.rs-help,
+.rs-crumb,
+.rs-empty,
+.rs-head-title,
+.rs-tab {
+    background: var(--rs-plate);
+}
+
+.rs-label,
+.rs-value,
+.rs-heading,
+.rs-note,
+.rs-help {
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 8px;
+}
+
+.rs-label {
+    flex: 0 1 auto;
+}
+
+.rs-row.stack > .rs-label {
+    align-self: flex-start;
+}
+
+.rs-heading {
+    padding: 3px 10px;
+}
+
+.rs-help-list {
+    padding: 6px 10px;
+}
+
+.rs-head-title {
+    flex: 0 1 auto;
+    margin-right: auto;
+    padding: 4px 10px;
+    border-radius: 12px;
+}
+
+.rs-tab {
+    margin: 0 1px 2px;
+    border-radius: 12px;
+}
+
+.rs-ui .rs-icon-btn,
+.rs-ui .rs-chip,
+.rs-ui .rs-btn,
+.rs-ui .rs-quick-btn,
+.rs-ui .rs-preset,
+.rs-ui .rs-swatch {
+    background: var(--rs-plate);
+}
+
+.rs-ui .rs-swatch {
+    padding: 6px 0;
+    border-radius: 14px;
+}
+
+.rs-ui .rs-switch {
+    background: linear-gradient(var(--rs-raise-strong), var(--rs-raise-strong)), var(--rs-plate);
+}
+
+.rs-select,
+.rs-search-input {
+    background-color: var(--rs-plate);
+}
+
+/* ---------- Live theme ----------
+   A band of light travels around the menu's border, and the same colors flow through the
+   controls that are switched on. Runs only while the menu is open. */
+
+@property --rs-turn {
+    syntax: '<angle>';
+    inherits: false;
+    initial-value: 0deg;
+}
+
+@property --rs-shift {
+    syntax: '<percentage>';
+    inherits: true;
+    initial-value: 0%;
+}
+
+/* The border: a ring cut out of a spinning color wheel */
+.rs-sheet::before {
+    content: '';
+    position: absolute;
+    inset: -1px 0 0;
+    padding: 2px;
+    border-radius: inherit;
+    background: conic-gradient(from var(--rs-turn, 0deg),
+        rgba(139, 92, 246, 0.28), rgba(34, 211, 238, 0.28) 30%, rgba(244, 114, 182, 0.28) 55%,
+        #8b5cf6 70%, #22d3ee 82%, #f472b6 92%, #fff 97%, rgba(139, 92, 246, 0.28));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+}
+
+.rs-sheet.open::before {
+    animation: rs-turn 7s linear infinite;
+}
+
+.rs-sheet.peek::before {
+    opacity: 0;
+}
+
+/* Controls that are on */
+.rs-ui .rs-switch[aria-checked="true"],
+.rs-ui .rs-chip[aria-pressed="true"],
+.rs-ui .rs-chip[aria-selected="true"],
+.rs-ui .rs-quick-btn[aria-pressed="true"],
+.rs-ui .rs-btn.primary,
+.rs-tab[aria-selected="true"]::after {
+    background: var(--rs-flow);
+    background-size: 200% 100%;
+}
+
+.rs-sheet.open .rs-switch[aria-checked="true"],
+.rs-sheet.open .rs-chip[aria-pressed="true"],
+.rs-sheet.open .rs-chip[aria-selected="true"],
+.rs-sheet.open .rs-quick-btn[aria-pressed="true"],
+.rs-sheet.open .rs-btn.primary,
+.rs-sheet.open .rs-tab[aria-selected="true"]::after {
+    animation: rs-flow 5s linear infinite;
+}
+
+/* Sliders: the filled part of the track carries the same moving colors */
+.rs-range::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, transparent var(--p), var(--rs-track) var(--p)),
+                var(--rs-flow) var(--rs-shift, 0%) 50% / 200% 100% repeat-x;
+}
+
+.rs-range::-moz-range-track {
+    background: linear-gradient(to right, transparent var(--p), var(--rs-track) var(--p)),
+                var(--rs-flow) var(--rs-shift, 0%) 50% / 200% 100% repeat-x;
+}
+
+.rs-sheet.open .rs-range {
+    animation: rs-shift 5s linear infinite;
+}
+
+@keyframes rs-turn {
+    to { --rs-turn: 360deg; }
+}
+
+@keyframes rs-flow {
+    to { background-position: 200% 50%; }
+}
+
+@keyframes rs-shift {
+    to { --rs-shift: 200%; }
+}
+
+@media (min-width: 900px), (orientation: landscape) and (min-width: 600px) {
+    .rs-sheet {
+        border-color: transparent;
+    }
+
+    .rs-sheet::before {
+        inset: -1px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rs-sheet::before,
+    .rs-ui *::before,
+    .rs-ui *::after,
+    .rs-ui .rs-range {
+        animation: none !important;
+    }
+}
