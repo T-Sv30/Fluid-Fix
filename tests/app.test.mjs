@@ -467,6 +467,91 @@ describe('device settings', () => {
     });
 });
 
+describe('fluid color over its life', () => {
+    const tints = () => JSON.parse(app.run('JSON.stringify(Array.from(ageColorTints()))'));
+
+    test('eight colors and their adjustments appear only while the feature is on', async () => {
+        start({ storage: WELCOMED });
+        openTab('Color', 'Palette');
+        assert.ok(visibleRows().includes('Change color with age'));
+        assert.ok(!visibleRows().includes('Color 1'));
+        app.click(row('Change color with age'));
+        await app.settle();
+        ['How many colors', 'Color 1', 'Color 2', 'Color 3', 'Color 4', 'Color 5', 'Color 6', 'Color 7', 'Color 8',
+            'Saturation', 'Change sharpness', 'Time to change'].forEach(label =>
+            assert.ok(visibleRows().includes(label), label));
+        app.frames(3);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('only as many colors as are in use are shown', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLORS = true; config.AGE_COLOR_COUNT = 3');
+        openTab('Color', 'Palette');
+        app.frames(2);
+        assert.ok(visibleRows().includes('Color 3'));
+        assert.ok(!visibleRows().includes('Color 4'));
+        assert.ok(!visibleRows().includes('Color 8'));
+    });
+
+    test('a chosen color sets the hue; brightness comes from the fluid', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLOR_1 = { r: 255, g: 0, b: 0 }; config.AGE_COLOR_2 = { r: 100, g: 50, b: 0 }; config.AGE_COLOR_3 = { r: 0, g: 0, b: 0 }');
+        const t = tints();
+        assert.equal(t.length, 24, 'eight colors, three channels each');
+        assert.deepEqual(t.slice(0, 3), [1, 0, 0]);
+        assert.deepEqual(t.slice(3, 6), [1, 0.5, 0], 'a dark shade is as bright as a light one');
+        assert.deepEqual(t.slice(6, 9), [1, 1, 1], 'black would erase the fluid, so it counts as white');
+    });
+
+    test('saturation runs from white to the full color', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLOR_1 = { r: 255, g: 0, b: 0 }; config.AGE_COLOR_SATURATION = 0');
+        assert.deepEqual(tints().slice(0, 3), [1, 1, 1]);
+        app.run('config.AGE_COLOR_SATURATION = 50');
+        assert.deepEqual(tints().slice(0, 3), [1, 0.5, 0.5]);
+        app.run('config.AGE_COLOR_SATURATION = 100');
+        assert.deepEqual(tints().slice(0, 3), [1, 0, 0]);
+    });
+
+    test('sharpness runs from one long blend to a sudden switch', () => {
+        start({ storage: WELCOMED });
+        // The blend between two colors covers this much of the time between them, either side of halfway
+        const soft = pct => app.run('config.AGE_COLOR_SHARPNESS = ' + pct + '; ageColorSoftness()');
+        assert.equal(soft(0), 0.5, 'blending the whole way');
+        assert.ok(soft(100) > 0 && soft(100) < 0.02, 'all but instant, and never zero');
+        assert.ok(soft(50) < soft(0) && soft(50) > soft(100));
+    });
+
+    test('the time slider runs from 1 second to 30', () => {
+        start({ storage: WELCOMED });
+        const seconds = pct => app.run('config.AGE_COLOR_TIME = ' + pct + '; ageColorSeconds()');
+        assert.equal(seconds(0), 1);
+        assert.equal(seconds(100), 30);
+        assert.ok(seconds(50) > 1 && seconds(50) < 30);
+    });
+
+    test('new fluid starts in the first color', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLORS = true; config.AGE_COLOR_1 = { r: 0, g: 0, b: 255 }');
+        const c = JSON.parse(app.run('JSON.stringify(generateColor())'));
+        assert.equal(c.r, 0);
+        assert.equal(c.g, 0);
+        assert.ok(c.b > 0);
+    });
+
+    test('the colors are saved with a preset, and a shared preset can’t ask for more than eight', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLORS = true; config.AGE_COLOR_8 = { r: 1, g: 2, b: 3 }; config.AGE_COLOR_SHARPNESS = 80; presetSave()');
+        const saved = JSON.parse(app.run('JSON.stringify(presetState.user[0].values)'));
+        assert.equal(saved.AGE_COLORS, true);
+        assert.deepEqual(saved.AGE_COLOR_8, { r: 1, g: 2, b: 3 });
+        assert.equal(saved.AGE_COLOR_SHARPNESS, 80);
+        assert.equal(app.run("cleanValues({ AGE_COLOR_COUNT: 99 }).AGE_COLOR_COUNT"), 8);
+        assert.equal(app.run("cleanValues({ AGE_COLOR_COUNT: 0 }).AGE_COLOR_COUNT"), 2);
+    });
+});
+
 describe('particles', () => {
     test('start out waiting for fluid instead of scattered over the screen', () => {
         start({ storage: WELCOMED });
