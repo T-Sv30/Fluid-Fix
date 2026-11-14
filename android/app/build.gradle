@@ -11,6 +11,10 @@ def appVersionCode = (System.getenv('RIPPL_VERSION_CODE') ?: (versionParts[0] * 
 // See docs/RELEASING.md.
 def keystoreFile = System.getenv('RIPPL_KEYSTORE_FILE')
 
+// CI signs debug builds with one shared debug key, so a new test build installs over the last.
+// Without it, Gradle uses the machine's own debug key as usual.
+def debugKeystoreFile = System.getenv('RIPPL_DEBUG_KEYSTORE_FILE')
+
 android {
     namespace = "io.github.tsv30.ripplstudio"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -28,6 +32,14 @@ android {
         }
     }
     signingConfigs {
+        debug {
+            if (debugKeystoreFile) {
+                storeFile file(debugKeystoreFile)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
         release {
             if (keystoreFile) {
                 storeFile file(keystoreFile)

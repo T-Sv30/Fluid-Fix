@@ -56,8 +56,9 @@ jobs:
             echo "::notice::No shared debug key here; this build cannot update an installed one."
             exit 0
           fi
-          mkdir -p "$HOME/.android"
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/debug.keystore"
+          echo "RIPPL_DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+          keytool -list -keystore "$RUNNER_TEMP/debug.keystore" -storepass android | grep -i "SHA-256"
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
