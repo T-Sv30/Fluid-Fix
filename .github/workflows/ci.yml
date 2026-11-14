@@ -46,9 +46,26 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - run: npm run android:sync
+      # Sign every debug build with the same key, so a new build installs over the last one and
+      # keeps its presets. Without the secret (forks, Dependabot) Gradle makes a throwaway key.
+      - name: Use the shared debug key
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.RIPPL_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "::notice::No shared debug key here; this build cannot update an installed one."
+            exit 0
+          fi
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/debug.keystore"
+          echo "RIPPL_DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+          keytool -list -keystore "$RUNNER_TEMP/debug.keystore" -storepass android | grep -i "SHA-256"
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
+      - name: Show the signing certificate
+        run: |
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$apksigner" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-256"
       - uses: actions/upload-artifact@v4
         with:
           name: rippl-studio-debug-apk
