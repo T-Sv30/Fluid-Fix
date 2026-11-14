@@ -33,7 +33,7 @@ describe('startup', () => {
         assert.deepEqual(app.errors, []);
         assert.match(app.userAgent(), /Pixel 8/, 'the harness pretends to be a phone on every machine');
         assert.deepEqual(app.$$('.rs-dock-btn').map(b => b.textContent), ['Presets', 'Random', 'Controls', 'Freeze', 'Capture']);
-        assert.equal(app.$$('.rs-tab').length, 8);
+        assert.deepEqual(app.$$('.rs-tab').map(t => t.textContent), ['Presets', 'Scene', 'Color', 'Effects', 'Physics', 'Layers', 'System']);
     });
 
     test('welcome appears once', () => {
@@ -122,7 +122,7 @@ describe('controls', () => {
 
     test('controls follow changes the app makes itself', () => {
         start({ storage: WELCOMED });
-        openTab('Look', 'Lighting');
+        openTab('Effects', 'Light');
         assert.equal(row('Bloom').querySelector('.rs-switch').getAttribute('aria-checked'), 'true');
         app.run('config.BLOOM = false');
         app.frames(2);
@@ -144,6 +144,134 @@ describe('controls', () => {
                 }
             }
         }
+    });
+});
+
+describe('finding your way', () => {
+    const visibleRows = () => app.$$('.rs-body .rs-row').filter(r => !r.hidden).map(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent);
+
+    test('every setting, section and button has a short description', () => {
+        start({ storage: WELCOMED });
+        const missing = [];
+        const check = (where, item) => {
+            const text = item.help;
+            if (!text || text.length < 12 || text.length > 140 || !/[.]$/.test(text)) missing.push(where + ' › ' + (typeof item.label === 'function' ? item.label() : item.label));
+        };
+        const tabs = app.run('buildTabs()');
+        let count = 0;
+        tabs.forEach(tab => {
+            if (tab.custom) { check('tab', tab); return; }
+            tab.sections.forEach(section => {
+                check(tab.label, section);
+                section.controls.forEach(c => {
+                    if (c.type === 'heading') return;
+                    if (c.type === 'quick') { c.items.forEach(i => { check(section.label, i); count++; }); return; }
+                    check(tab.label + ' › ' + section.label, c);
+                    count++;
+                });
+            });
+        });
+        assert.deepEqual(missing, []);
+        assert.ok(count > 150, 'described ' + count + ' settings');
+    });
+
+    test('every choice of the big pickers has its own note', () => {
+        start({ storage: WELCOMED });
+        const gaps = app.run(`(() => {
+            const lists = { SIM_MODE: SIM_MODE_NAMES, GESTURE: GESTURE_MODES, INJECTION: INJECTION_MODES, FORCE_FIELD: FORCE_FIELDS,
+                            EDGE: EDGE_MODES, TEXT_MODE: TEXT_MODES, PERFORMANCE_MODE: Object.keys(PERFORMANCE_MODES) };
+            const out = [];
+            Object.keys(lists).forEach(k => lists[k].forEach(name => { if (!OPTION_HELP[k][name]) out.push(k + ':' + name); }));
+            Object.keys(HELP).forEach(k => { if (!(k in config) && !(k in PCT)) out.push('unknown key ' + k); });
+            return out.join(', ');
+        })()`);
+        assert.equal(gaps, '');
+    });
+
+    test('the ? button shows and hides descriptions, and remembers the choice', async () => {
+        start({ storage: WELCOMED });
+        openTab('Scene');
+        const button = app.$('.rs-icon-btn[aria-label^="Show a short description"]');
+        const sheet = app.$('.rs-sheet');
+        assert.equal(sheet.classList.contains('help-on'), false);
+        app.click(button);
+        assert.equal(sheet.classList.contains('help-on'), true);
+        assert.equal(button.getAttribute('aria-pressed'), 'true');
+
+        const mode = row('Mode');
+        assert.match(mode.querySelector('.rs-help').textContent, /ready-made scene.*Standard Fluid: plain fluid/);
+        app.click(Array.from(mode.querySelectorAll('.rs-chip')).find(c => c.textContent === 'Whirlpool'));
+        await app.settle();
+        assert.match(mode.querySelector('.rs-help').textContent, /Whirlpool: color pours in at the rim/, 'follows the current choice');
+
+        const speed = row('Speed').querySelector('input');
+        assert.equal(app.document.getElementById(speed.getAttribute('aria-describedby')).textContent, app.run('HELP.SPEED'));
+        assert.match(app.$('.rs-intro').textContent, /What is happening on screen/);
+        const firstQuick = app.$('.rs-help-list div');   // the colon between the two is drawn by the stylesheet
+        assert.equal(firstQuick.querySelector('dt').textContent, 'Splash');
+        assert.match(firstQuick.querySelector('dd').textContent, /^Adds a handful/);
+
+        const stored = app.window.localStorage.getItem('rippl.help');
+        app.close();
+        start({ storage: { ...WELCOMED, 'rippl.help': stored } });
+        assert.equal(app.$('.rs-sheet').classList.contains('help-on'), true);
+    });
+
+    test('search finds settings by name, description or place, and they work in place', async () => {
+        start({ storage: WELCOMED });
+        app.click(app.$('.rs-icon-btn[aria-label="Search the settings"]'));
+        assert.equal(app.run('RipplUI.isOpen()'), true, 'search opens the sheet');
+        assert.equal(app.$('.rs-search').hidden, false);
+        assert.match(app.$('.rs-empty').textContent, /Type to find/);
+
+        const type = text => {
+            const input = app.$('.rs-search-input');
+            input.value = text;
+            input.dispatchEvent(new app.window.Event('input', { bubbles: true }));
+        };
+
+        type('bloom');
+        assert.deepEqual(visibleRows(), ['Bloom', 'Bloom intensity', 'Bloom threshold', 'Effect quality'],
+            'name matches come first, then settings whose description mentions the word');
+        assert.equal(app.$('.rs-crumb').textContent, 'Effects › Light');
+        app.click(row('Bloom'));
+        await app.settle();
+        assert.equal(app.run('config.BLOOM'), false, 'a result is the real control');
+        assert.ok(visibleRows().includes('Bloom intensity'), 'results stay visible even when their feature is off');
+
+        type('honey');
+        assert.deepEqual(visibleRows(), ['Thickness'], 'matches words in the description');
+        type('edges bounce');
+        assert.deepEqual(visibleRows(), ['Bounce', 'Corners'],
+            'every word must match somewhere, and a match in the name comes first');
+        type('zzzz');
+        assert.match(app.$('.rs-empty').textContent, /No setting matches “zzzz”/);
+
+        type('gravity');
+        app.click(app.$('.rs-crumb'));
+        assert.equal(app.$('.rs-search').hidden, true, 'going to a place closes search');
+        assert.equal(app.$('.rs-tab[aria-selected="true"]').textContent, 'Physics');
+        assert.equal(app.$('.rs-subtabs .rs-chip[aria-selected="true"]').textContent, 'Forces');
+        assert.ok(visibleRows().includes('Gravity'));
+
+        app.run('RipplUI.search()');
+        assert.equal(app.run('RipplUI.handleBack()'), true);
+        assert.equal(app.$('.rs-search').hidden, true, 'Back leaves search first');
+        assert.equal(app.run('RipplUI.isOpen()'), true);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('a feature’s options appear only while the feature is on', async () => {
+        start({ storage: WELCOMED });
+        openTab('Layers', 'Particles');
+        assert.deepEqual(visibleRows(), ['Particles']);
+        app.click(row('Particles'));
+        await app.settle();
+        assert.ok(visibleRows().length > 12);
+        assert.ok(!visibleRows().includes('Single color'));
+        app.run("config.PARTICLE_COLOR_MODE = 'Single Color'");
+        app.frames(2);
+        assert.ok(visibleRows().includes('Single color'));
     });
 });
 

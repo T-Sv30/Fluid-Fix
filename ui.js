@@ -40,6 +40,11 @@
         plus:      'M12 5v14 M5 12h14',
         reset:     'M4 12a8 8 0 1 0 2.6-5.9 M4 4v5h5',
         phone:     'M7 3h10v18H7z M11 18h2',
+        bulb:      'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z',
+        layers:    'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
+        help:      'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2 1-1.2 1.8 M12 17h.01',
+        search:    'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16.2 16.2L21 21',
+        back:      'M15 5l-7 7 7 7',
     };
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -113,6 +118,14 @@
         refreshQueued: false,
         welcome: null,
         shown: {},
+        help: false,          // descriptions shown under every control
+        helpButton: null,
+        searching: false,
+        searchBar: null,
+        searchInput: null,
+        searchPanel: null,
+        searchIndex: null,
+        expandedBeforeSearch: false,
     };
 
     // ---------- Controls ----------
@@ -149,10 +162,40 @@
         ui.sheet.classList.remove('peek');
     }
 
+    // The short description of a control. For a list of choices it ends with the current choice's own note.
+    function describe (c) {
+        let text = c.help || '';
+        if (c.optionHelp) {
+            const current = c.get();
+            const note = c.optionHelp[current];
+            if (note) text += (text ? ' ' : '') + current + ': ' + note;
+        }
+        return text;
+    }
+
+    // The description element. It is always in the page (so screen readers can read it through
+    // aria-describedby) and becomes visible when descriptions are switched on.
+    function helpLine (c, target) {
+        const p = h('p', { class: 'rs-help', id: 'rs-h' + (++idCounter) });
+        p.textContent = describe(c);
+        if (target && (c.help || c.optionHelp)) target.setAttribute('aria-describedby', p.id);
+        return p;
+    }
+
+    function refreshHelp (c, p) {
+        if (!c.optionHelp) return;
+        const text = describe(c);
+        if (p.textContent !== text) p.textContent = text;
+    }
+
+    function labelBlock (c, id, target) {
+        return h('div', { class: 'rs-text' }, h('span', { class: 'rs-label', id }, c.label), helpLine(c, target));
+    }
+
     function buildToggle (c) {
         const id = 'rs-l' + (++idCounter);
         const sw = h('button', { class: 'rs-switch', type: 'button', role: 'switch', 'aria-checked': 'false', 'aria-labelledby': id });
-        const row = h('div', { class: 'rs-row' }, h('span', { class: 'rs-label', id }, c.label), sw);
+        const row = h('div', { class: 'rs-row' }, labelBlock(c, id, sw), sw);
         row.addEventListener('click', () => {
             c.set(!c.get());
             haptic('light');
@@ -170,6 +213,7 @@
         const input = h('input', { class: 'rs-range', type: 'range', min, max, step: c.step || 1, 'aria-labelledby': id });
         const row = h('div', { class: 'rs-row stack' },
             h('div', { class: 'rs-line' }, h('span', { class: 'rs-label', id }, c.label), readout),
+            helpLine(c, input),
             input);
 
         function paint (v) {
@@ -224,12 +268,14 @@
             });
             const group = h('div', { class: c.swatch ? 'rs-swatches' : 'rs-chips', role: 'group', 'aria-labelledby': id });
             buttons.forEach(b => group.appendChild(b));
-            const row = h('div', { class: 'rs-row stack' }, h('span', { class: 'rs-label', id }, c.label), group);
+            const help = helpLine(c, group);
+            const row = h('div', { class: 'rs-row stack' }, h('span', { class: 'rs-label', id }, c.label), help, group);
             return {
                 el: row,
                 update: () => {
                     const current = c.get();
                     buttons.forEach((b, i) => b.setAttribute('aria-pressed', options[i].value === current ? 'true' : 'false'));
+                    refreshHelp(c, help);
                 },
             };
         }
@@ -237,13 +283,15 @@
         const select = h('select', { class: 'rs-select', 'aria-labelledby': id });
         options.forEach((o, i) => select.appendChild(h('option', { value: i }, o.label)));
         select.addEventListener('change', () => pick(options[Number(select.value)]));
-        const row = h('div', { class: 'rs-row' }, h('span', { class: 'rs-label', id }, c.label), select);
+        const text = labelBlock(c, id, select);
+        const row = h('div', { class: 'rs-row' }, text, select);
         return {
             el: row,
             update: () => {
                 const current = c.get();
                 const i = options.findIndex(o => o.value === current);
                 if (i !== -1) select.value = String(i);
+                refreshHelp(c, text.lastChild);
             },
         };
     }
@@ -265,7 +313,7 @@
             c.set(fromHex(input.value));
             changed(c);
         });
-        const row = h('div', { class: 'rs-row' }, h('span', { class: 'rs-label', id }, c.label), input);
+        const row = h('div', { class: 'rs-row' }, labelBlock(c, id, input), input);
         return { el: row, update: () => { input.value = toHex(c.get() || {}); } };
     }
 
@@ -285,7 +333,7 @@
     function buildAction (c) {
         const b = actionButton(c);
         return {
-            el: h('div', { class: 'rs-row' }, b),
+            el: h('div', { class: 'rs-row stack' }, b, helpLine(c, b)),
             update: () => { if (c.disabled) b.setAttribute('aria-disabled', c.disabled() ? 'true' : 'false'); },
         };
     }
@@ -305,11 +353,21 @@
             return { item, b };
         });
         return {
-            el: grid,
+            el: h('div', { class: 'rs-quick-wrap' }, grid, helpList(c.items)),
             update: () => items.forEach(({ item, b }) => {
                 if (item.on) b.setAttribute('aria-pressed', item.on() ? 'true' : 'false');
             }),
         };
+    }
+
+    // "Name: what it does" for a set of buttons, shown when descriptions are on
+    function helpList (items) {
+        const list = h('dl', { class: 'rs-help rs-help-list' });
+        items.forEach(item => {
+            if (!item.help) return;
+            list.appendChild(h('div', null, h('dt', null, value(item.label)), h('dd', null, item.help)));
+        });
+        return list;
     }
 
     const BUILDERS = {
@@ -320,12 +378,18 @@
         action: buildAction,
         quick: buildQuick,
         heading: c => ({ el: h('h3', { class: 'rs-heading' }, c.label) }),
-        note: c => ({ el: h('p', { class: 'rs-note' }, c.label) }),
     };
 
-    function buildControls (controls) {
+    function intro (text) {
+        const p = h('p', { class: 'rs-help rs-intro' });
+        p.textContent = text || '';
+        return p;
+    }
+
+    function buildControls (controls, introText) {
         const el = h('div', { class: 'rs-panel', role: 'tabpanel' });
         const bindings = [];
+        el.appendChild(intro(introText));
         controls.forEach(c => {
             const build = BUILDERS[c.type];
             if (!build) throw new Error('Unknown control type: ' + c.type);
@@ -375,9 +439,11 @@
                 actions.appendChild(b);
             });
             el.replaceChildren(
+                intro((tabById('presets') || {}).help),
                 h('h3', { class: 'rs-heading' }, 'Your looks'),
                 mine.length ? grid(mine) : h('p', { class: 'rs-empty' }, 'Nothing saved yet. Shape the fluid the way you like it, then tap “Save this look”.'),
                 actions,
+                helpList(p.actions),
                 h('h3', { class: 'rs-heading' }, 'Built in'),
                 grid(builtin)
             );
@@ -398,14 +464,137 @@
     }
 
     function currentPanel () {
+        if (ui.searching) return ui.searchPanel;
         const tab = tabById(ui.tab);
         if (!tab) return null;
         const key = tab.id + '/' + (tab.custom ? '' : ui.section[tab.id]);
         if (!ui.panels[key]) {
-            if (tab.custom === 'presets') ui.panels[key] = buildPresets();
-            else ui.panels[key] = buildControls(tab.sections.find(s => s.id === ui.section[tab.id]).controls);
+            if (tab.custom === 'presets') {
+                ui.panels[key] = buildPresets();
+            } else {
+                const section = tab.sections.find(s => s.id === ui.section[tab.id]);
+                ui.panels[key] = buildControls(section.controls, section.help);
+            }
         }
         return ui.panels[key];
+    }
+
+    // ---------- Descriptions ----------
+
+    function setHelp (on, announce) {
+        ui.help = !!on;
+        ui.sheet.classList.toggle('help-on', ui.help);
+        ui.helpButton.classList.toggle('on', ui.help);
+        ui.helpButton.setAttribute('aria-pressed', ui.help ? 'true' : 'false');
+        store('rippl.help', ui.help ? '1' : '0');
+        if (announce && ui.opts.toast) ui.opts.toast(ui.help ? 'Descriptions on · every control explains itself' : 'Descriptions off');
+    }
+
+    // ---------- Search ----------
+
+    // Every setting in the menu, with the words it can be found by
+    function searchIndex () {
+        if (ui.searchIndex) return ui.searchIndex;
+        const index = [];
+        ui.opts.tabs.forEach(tab => (tab.sections || []).forEach(section => {
+            const where = tab.sections.length > 1 && section.label ? tab.label + ' › ' + section.label : tab.label;
+            const add = control => {
+                let options = '';
+                if (control.type === 'select') options = normalizeOptions(control.options).map(o => o.label).join(' ');
+                index.push({
+                    control, tab: tab.id, section: section.id, where,
+                    label: control.label.toLowerCase(),
+                    words: [control.label, control.help || '', options, where].join(' ').toLowerCase(),
+                });
+            };
+            section.controls.forEach(c => {
+                if (c.type === 'quick') {
+                    // One-shot actions only; the switches in the grid exist as full controls elsewhere
+                    c.items.filter(i => !i.on).forEach(i => add({ type: 'action', label: value(i.label), help: i.help, icon: value(i.icon), run: i.run }));
+                } else if (c.type !== 'heading' && c.label) {
+                    add(c);
+                }
+            });
+        }));
+        ui.searchIndex = index;
+        return index;
+    }
+
+    function goTo (tabId, sectionId) {
+        exitSearch(true);
+        ui.section[tabId] = sectionId;
+        if (ui.tab === tabId) showPanel(); else selectTab(tabId);
+    }
+
+    function runSearch (query) {
+        const el = h('div', { class: 'rs-panel', role: 'region', 'aria-label': 'Search results', 'aria-live': 'polite' });
+        const bindings = [];
+        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+        if (!words.length) {
+            el.appendChild(h('p', { class: 'rs-empty' }, 'Type to find any setting, for example “bloom”, “gravity” or “battery”.'));
+        } else {
+            // Best first: the name starts with the query, holds every word, holds any word, then description-only matches
+            const inLabel = (e, w) => e.label.indexOf(w) !== -1;
+            const rank = e => (e.label.indexOf(words[0]) === 0 ? 0 : words.every(w => inLabel(e, w)) ? 1 : words.some(w => inLabel(e, w)) ? 2 : 3);
+            const found = searchIndex().filter(e => words.every(w => e.words.indexOf(w) !== -1));
+            found.sort((a, b) => rank(a) - rank(b));
+            const shown = found.slice(0, 24);
+            if (!shown.length) {
+                el.appendChild(h('p', { class: 'rs-empty' }, 'No setting matches “' + query.trim() + '”. Try a shorter or different word.'));
+            }
+            // Keep results from the same place together, under a link to that place
+            const groups = [];
+            shown.forEach(e => {
+                let g = groups.find(x => x.where === e.where);
+                if (!g) groups.push(g = { where: e.where, tab: e.tab, section: e.section, entries: [] });
+                g.entries.push(e);
+            });
+            groups.forEach(g => {
+                const crumb = h('button', { class: 'rs-crumb', type: 'button', 'aria-label': 'Go to ' + g.where }, h('span', null, g.where), icon('up'));
+                crumb.addEventListener('click', () => {
+                    haptic('light');
+                    goTo(g.tab, g.section);
+                });
+                el.appendChild(crumb);
+                g.entries.forEach(e => {
+                    const binding = BUILDERS[e.control.type](e.control);
+                    binding.control = e.control;
+                    el.appendChild(binding.el);
+                    bindings.push(binding);
+                });
+            });
+            if (found.length > shown.length)
+                el.appendChild(h('p', { class: 'rs-note' }, (found.length - shown.length) + ' more. Add a word to narrow it down.'));
+        }
+        // Results always show, even for options whose feature is switched off
+        ui.searchPanel = { el, bindings, search: true };
+        ui.body.replaceChildren(el);
+        ui.body.scrollTop = 0;
+        refresh();
+    }
+
+    function enterSearch () {
+        if (ui.searching) { ui.searchInput.focus(); return; }
+        ui.searching = true;
+        ui.expandedBeforeSearch = ui.expanded;
+        ui.sheet.classList.add('searching');
+        ui.searchBar.hidden = false;
+        ui.searchInput.value = '';
+        if (!ui.open) open();
+        setExpanded(true);   // room for results above the keyboard
+        runSearch('');
+        ui.searchInput.focus();
+    }
+
+    function exitSearch (keepPanel) {
+        if (!ui.searching) return;
+        ui.searching = false;
+        ui.searchPanel = null;
+        ui.sheet.classList.remove('searching');
+        ui.searchBar.hidden = true;
+        if (ui.sheet.contains(document.activeElement) && document.activeElement.blur) document.activeElement.blur();
+        setExpanded(ui.expandedBeforeSearch);
+        if (!keepPanel) showPanel();
     }
 
     function showPanel () {
@@ -425,6 +614,7 @@
             });
         }
         const panel = currentPanel();
+        if (ui.searching) return;   // the results stay up; the tab shows when search closes
         panel.el.setAttribute('aria-label', tab.label);
         ui.body.replaceChildren(panel.el);
         ui.body.scrollTop = 0;
@@ -470,6 +660,7 @@
 
     function open (tabId) {
         if (ui.hidden) setHidden(false);
+        if (tabId) exitSearch();
         if (tabId && tabId !== ui.tab) selectTab(tabId);
         if (ui.open) return;
         ui.open = true;
@@ -490,6 +681,7 @@
     }
 
     function close () {
+        exitSearch();
         hideSheet();
         dropHistory();
     }
@@ -515,6 +707,7 @@
         if (ui.welcome) { dismissWelcome(); return true; }
         if (ui.opts.closeDialog && ui.opts.closeDialog()) return true;
         if (ui.hidden) { setHidden(false); return true; }
+        if (ui.searching) { exitSearch(); return true; }
         if (ui.open) { close(); return true; }
         return false;
     }
@@ -525,7 +718,7 @@
         if (!panel) return;
         panel.bindings.forEach(b => {
             const c = b.control;
-            if (c.visible) b.el.hidden = !c.visible();
+            if (c.visible && !panel.search) b.el.hidden = !c.visible();
             if (b.update && !b.el.hidden) b.update();
         });
     }
@@ -606,8 +799,22 @@
         const head = h('div', { class: 'rs-head' },
             h('div', { class: 'rs-head-title' }, h('span', { class: 'rs-brand' }, o.title || 'RIPPL STUDIO'), ui.status));
         (o.headActions || []).forEach(a => head.appendChild(iconButton(a.icon, a.label, a.run)));
-        head.appendChild(iconButton('hide', 'Hide the controls', () => setHidden(true)));
+        head.appendChild(iconButton('search', 'Search the settings', enterSearch));
+        ui.helpButton = iconButton('help', 'Show a short description of every control', () => setHelp(!ui.help, true));
+        ui.helpButton.setAttribute('aria-pressed', 'false');
+        head.appendChild(ui.helpButton);
         head.appendChild(iconButton('close', 'Close the controls', close));
+
+        ui.searchInput = h('input', {
+            class: 'rs-search-input', type: 'search', placeholder: 'Search settings', 'aria-label': 'Search settings',
+            autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', enterkeyhint: 'search',
+        });
+        ui.searchInput.addEventListener('input', () => runSearch(ui.searchInput.value));
+        ui.searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') ui.searchInput.blur();   // put the keyboard away; the results are already there
+        });
+        ui.searchBar = h('div', { class: 'rs-search', role: 'search', hidden: true },
+            iconButton('back', 'Close search', () => exitSearch()), ui.searchInput);
 
         const tabs = h('div', { class: 'rs-tabs', role: 'tablist', 'aria-label': 'Settings' });
         o.tabs.forEach(t => {
@@ -631,7 +838,7 @@
 
         ui.subtabs = h('div', { class: 'rs-subtabs', role: 'tablist', 'aria-label': 'Section', hidden: true });
         ui.body = h('div', { class: 'rs-body' });
-        const sheet = h('section', { class: 'rs-sheet', role: 'dialog', 'aria-label': 'Controls' }, grab, head, tabs, ui.subtabs, ui.body);
+        const sheet = h('section', { class: 'rs-sheet', role: 'dialog', 'aria-label': 'Controls' }, grab, head, ui.searchBar, tabs, ui.subtabs, ui.body);
 
         // Drag the handle to resize, or flick it down to close
         let drag = null;
@@ -678,7 +885,8 @@
             h('ul', { class: 'rs-welcome-list' },
                 tip('touch', 'Drag anywhere to stir the fluid. Use several fingers at once.'),
                 tip('controls', 'Tap Controls to change colors, physics, particles and more.'),
-                tip('presets', 'Save looks you like, and capture images to keep or share.')),
+                tip('presets', 'Save looks you like, and capture images to keep or share.'),
+                tip('help', 'In Controls, tap ? for a short description of everything, or search for any setting.')),
             start);
         const overlay = h('div', { class: 'rs-welcome' }, card);
         setTimeout(() => { if (ui.welcome) start.focus(); }, 50);
@@ -716,6 +924,7 @@
         if (window.RipplNative) window.RipplNative.onBack(handleBack);
 
         selectTab(opts.startTab || opts.tabs[0].id);
+        setHelp(store('rippl.help') === '1', false);
 
         if (opts.welcome !== false && !store('rippl.welcomed')) {
             ui.welcome = buildWelcome();
@@ -733,6 +942,9 @@
         setHidden,
         toggleHidden () { setHidden(!ui.hidden); },
         handleBack,
+        search: enterSearch,
+        setHelp (on) { setHelp(on, false); },
+        isHelpOn: () => ui.help,
         refresh,
         refreshPresets,
         tick,

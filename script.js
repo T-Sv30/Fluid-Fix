@@ -2964,41 +2964,270 @@ function setKeepAwake (on) {
     });
 }
 
+// ---------- Descriptions ----------
+// One short sentence for every setting, shown when descriptions are switched on (the ? button)
+// and searched by the settings search. Keys are config keys (or PCT keys for mapped sliders).
+
+const HELP = {
+    // Scene
+    SIM_MODE: 'A ready-made scene. Each one sets its own forces and most keep moving on their own.',
+    SPEED: 'How fast the simulation runs. 1.0× is normal; 0 stops it.',
+    MIRROR_MODE: 'Repeats everything you paint across one or more mirror lines.',
+    KALEIDOSCOPE: 'Repeats everything you paint in rotated, reflected wedges around the centre.',
+    KALEIDO_SEGMENTS: 'How many wedges the kaleidoscope has.',
+    // Touch
+    GESTURE: 'What a finger does to the fluid as it moves.',
+    INJECTION: 'How color is released while you touch.',
+    TOUCH_FORCE: 'How hard every touch and automatic emitter pushes. 1.0× is normal.',
+    TOUCH_RADIUS: 'How wide an area each touch affects.',
+    TOUCH_SENSITIVITY: 'Below the middle, tiny jitters are ignored; above it, small movements are amplified.',
+    TOUCH_ATTRACTION: 'Pulls nearby fluid toward your finger while it is down.',
+    TOUCH_REPULSION: 'Pushes nearby fluid away from your finger while it is down.',
+    MULTI_TOUCH: 'Extra strength applied while two or more fingers are down.',
+    CONTINUOUS_DRAWING: 'Keeps adding color under a finger that is holding still.',
+    RANDOM_INJECTION: 'Every new touch starts with a burst of random colors.',
+    // Color
+    PALETTE: 'The set of colors the fluid is painted with.',
+    COLORFUL: 'Each finger changes to a new color from the palette every moment, instead of keeping one.',
+    AUTO_TRANSITION: 'Fades smoothly to the next palette every few seconds.',
+    TRANSITION_TIME: 'How long each palette stays before the next one fades in.',
+    RAINBOW: 'Colors sweep continuously around the color wheel.',
+    RAINBOW_SPD: 'How quickly the rainbow moves through its colors.',
+    BACKGROUND: 'What sits behind the fluid.',
+    BACK_COLOR: 'Your own background color. Choosing one switches the background to Custom.',
+    BG_BRIGHTNESS: 'Makes the background darker or brighter.',
+    BG_BLUR: 'Adds a soft, out-of-focus copy of the fluid behind the sharp one.',
+    BG_OPACITY: 'How strongly the background shows.',
+    BLACKLIGHT: 'Shows the fluid as fluorescent paint under ultraviolet light.',
+    BLACKLIGHT_INTENSITY: 'How strong the ultraviolet light is.',
+    FLUORESCENCE: 'How brightly the colors glow, including their glowing edges.',
+    UV_MODE: 'The color the fluid glows under blacklight.',
+    // Effects: light
+    BLOOM: 'Bright areas spill a soft glow onto their surroundings.',
+    BLOOM_INT: 'How strong the bloom glow is.',
+    BLOOM_THR: 'How bright a color must be before it blooms. Lower makes more of the picture glow.',
+    GLOW_INTENSITY: 'An extra halo around all color, bright or not.',
+    GLOW_RADIUS: 'How far the glow halo spreads.',
+    SUNRAYS: 'Beams of light streak out from the bright areas.',
+    SUNRAYS_W: 'How strong the sunrays are.',
+    FLARE: 'Adds camera-style streaks and ghosts around the brightest spots.',
+    FLARE_STYLE: 'The shape of the lens flare.',
+    // Effects: surface
+    SHADING: 'Lights the fluid from the side so it looks raised rather than flat.',
+    SPECULAR: 'Adds shiny highlights, as if the fluid were wet.',
+    SPECULAR_STYLE: 'How broad or tight the shiny highlights are.',
+    REFLECTION: 'Makes the surface mirror-like, picking up light from its surroundings.',
+    REFRACTION: 'Bends what is seen through the fluid, like looking through glass.',
+    DEPTH: 'Gives the fluid height, with relief lighting and a drop shadow.',
+    TRANSPARENCY: 'Lets the background show through the fluid.',
+    // Effects: tone
+    GAMMA: 'Remaps brightness the way a camera would, using the tone below.',
+    GAMMA_MODE: 'The brightness curve used by tone mapping.',
+    SATURATION: 'How vivid the colors are. The middle leaves them unchanged.',
+    CONTRAST: 'The difference between dark and bright. The middle leaves it unchanged.',
+    COLOR_VARIATION: 'Shifts hues slightly across the picture so colors look less uniform.',
+    FILTER: 'A warm color grade with a dark vignette and film grain.',
+    INVERT: 'Swaps every color for its opposite.',
+    // Effects: stylize
+    BLUR: 'Softens the whole picture.',
+    SHARPEN: 'Makes edges crisper.',
+    CHROMATIC_ABERRATION: 'Splits colors apart toward the edges, like a cheap lens.',
+    FRINGE: 'Adds colored fringes around bright edges.',
+    NEON: 'Draws the edges of the fluid as glowing lines.',
+    EMBOSS: 'Makes the picture look pressed into metal.',
+    PIXELS: 'Turns the picture into large square pixels.',
+    PIXEL_MODE: 'How big the pixels are.',
+    // Effects: motion
+    MOTION: 'Leaves fading copies of earlier frames behind moving color.',
+    MOTION_STYLE: 'How the echoes blend with the picture.',
+    MOTION_INTENSITY: 'How long the echoes last.',
+    SHAKE: 'Shakes the screen the harder you stir. Off when your device asks for reduced motion.',
+    SHAKE_STYLE: 'How strong the shake is.',
+    // Physics: fluid
+    RADIUS: 'How large each blob of color is when it enters the fluid.',
+    DISSIPATION: 'How long color takes to fade away.',
+    TRAILS: 'Color fades about eight times more slowly, leaving long trails.',
+    VISCOSITY: 'How thick the fluid is. Higher moves like honey.',
+    VORTICITY: 'How readily the fluid curls into small swirls.',
+    DRAG: 'How quickly motion dies down. Low keeps the fluid moving for a long time.',
+    FLOW_STRENGTH: 'How far the fluid carries its own motion. The middle is normal.',
+    PRESSURE_LEVEL: 'How carefully pressure is solved. Max is more accurate and uses more power.',
+    PRESSURE_STR: 'How much pressure carries over between frames. Higher feels springier.',
+    // Physics: forces
+    GRAVITY: 'Pulls colored fluid downward.',
+    BUOYANCY: 'Makes colored fluid sink or rise. The middle is neutral.',
+    TURBULENCE: 'Stirs the fluid with constantly shifting swirls.',
+    SWIRL: 'Spins the whole fluid around the centre.',
+    ELASTICITY: 'Makes the fluid spring back with a wobble.',
+    RANDOMNESS: 'Adds random variation to where color goes and how hard it is pushed.',
+    FLOW_DIRECTION: 'A steady current that carries the color in one direction or pattern.',
+    FLOW_SPEED: 'How fast the steady current moves.',
+    FORCE_FIELD: 'An invisible force that shapes the whole fluid.',
+    FIELD_STRENGTH: 'How strong the force field is.',
+    // Physics: edges
+    EDGE: 'What happens when fluid reaches the edge of the screen.',
+    CORNER: 'How the four corners treat the fluid.',
+    REPEL_STRENGTH: 'How hard a repelling edge or corner pushes the fluid back.',
+    REPEL_DISTANCE: 'How far from the edge the push begins.',
+    EDGE_BOUNCE: 'Makes fluid rebound off the edges.',
+    EDGE_FRICTION: 'Slows fluid down as it slides along the edges.',
+    EDGE_SOFTNESS: 'How gradually edge effects build up. Low is abrupt, high is gentle.',
+    // Particles
+    PARTICLES: 'Thousands of small particles that ride on the fluid’s motion.',
+    PARTICLE_STYLE: 'What each particle looks like.',
+    PARTICLE_AMOUNT: 'How many particles there are. More looks richer and uses more power.',
+    PARTICLE_COLOR_MODE: 'Where particles get their color.',
+    PARTICLE_COLOR: 'The color used when the color mode is Single Color.',
+    PARTICLE_MIX: 'The balance between the fluid and the particles, from fluid only to particles only.',
+    PARTICLE_INTENSITY: 'How bright the particles are.',
+    PARTICLE_SIZE: 'How big each particle is.',
+    PARTICLE_LENGTH: 'How long the streak behind a moving particle is.',
+    PARTICLE_GLOW: 'The halo around each particle.',
+    PARTICLE_SPEED: 'How fast particles follow the fluid.',
+    PARTICLE_DENSITY: 'The share of the particles that is shown.',
+    PARTICLE_SPREAD: 'Where particles appear: the whole screen at the top, around your finger lower down.',
+    PARTICLE_FADE: 'How quickly each particle disappears.',
+    PARTICLE_TURBULENCE: 'Adds jitter to particle paths.',
+    PARTICLE_ATTRACTION: 'Makes particles drift toward each other.',
+    PARTICLE_COLLISION: 'Crowded particles push each other apart.',
+    PARTICLE_TRAILS: 'Particles leave fading lines behind them.',
+    // Text
+    TEXT: 'Shows your words in the fluid.',
+    TEXT_MODE: 'Whether the letters pour color into the fluid or stand in its way.',
+    TEXT_FONT: 'The typeface.',
+    TEXT_SIZE: 'How big the letters are.',
+    TEXT_COLOR: 'The color of the letters.',
+    TEXT_OPACITY: 'How solid the letters look.',
+    TEXT_OUTLINE: 'Draws a line around each letter.',
+    TEXT_OUTLINE_THICKNESS: 'How thick the outline is.',
+    TEXT_GLOW: 'Adds a glow around the letters.',
+    TEXT_GLOW_INTENSITY: 'How strong the glow around the letters is.',
+    TEXT_X: 'Moves the text left or right.',
+    TEXT_Y: 'Moves the text up or down.',
+    TEXT_ROTATION: 'Turns the text. 0° is level.',
+    // System
+    PERFORMANCE_MODE: 'One tap sets all the options below for your battery or your eyes.',
+    DYE_RESOLUTION: 'How sharp the color is. Higher looks crisper and uses more power.',
+    SIM_RESOLUTION: 'How finely the motion is calculated. Higher gives smaller swirls and uses more power.',
+    FPS_LIMIT: 'The most frames drawn per second. Lower saves battery.',
+    RENDER_SCALE: 'The resolution the picture is drawn at, as a share of your screen’s.',
+    EFFECT_QUALITY: 'The resolution of bloom, sunrays and glow.',
+    PARTICLE_LIMIT: 'The most particles allowed, whatever the Particles tab asks for.',
+    ADAPTIVE_QUALITY: 'Lowers quality automatically when frames run slow and restores it when they recover.',
+    BATTERY_SAVER: 'Caps the frame rate, resolution, effects and particles to save power.',
+    CAPTURE_RESOLUTION: 'How large saved images are. Bigger takes a moment longer.',
+    TRANSPARENT: 'Saves images without a background, for use over other pictures.',
+    SPLASHES: 'Drops a few gentle splashes every couple of seconds, so the screen is never still.',
+    WALLPAPER_CLEAR: 'Clears the fluid and starts with new splashes each time you return to the app.',
+};
+
+// Descriptions of individual choices; the one for the current choice is shown under the control
+const OPTION_HELP = {
+    SIM_MODE: {
+        'Standard Fluid': 'plain fluid with every scene force switched off.',
+        'Vortex': 'the fluid circles the centre.',
+        'Whirlpool': 'color pours in at the rim and drains in the middle.',
+        'Tornado': 'a rising, twisting column.',
+        'Explosion': 'bursts go off at regular intervals.',
+        'Fountain': 'a jet that arcs up and falls.',
+        'Waterfall': 'color falls from the top and out of the bottom.',
+        'Waves': 'a travelling ribbon of waves.',
+        'Orbit': 'planets of color on orbits around the centre.',
+        'Magnetic': 'color streams along field lines between two poles.',
+        'Plasma': 'crackling arcs in turbulence.',
+        'Galaxy': 'two spiral arms around a bright core.',
+        'Black Hole': 'clouds spiral inward and vanish.',
+        'Reverse Flow': 'the fluid moves against your finger.',
+    },
+    GESTURE: {
+        'Push': 'the classic: fluid follows your finger.',
+        'Pull': 'draws color in behind the finger.',
+        'Swirl': 'spins the fluid around the finger.',
+        'Attract': 'hold to pull color in.',
+        'Repel': 'hold to push color away.',
+        'Inject': 'adds color with very little force.',
+        'Erase': 'wipes color away.',
+        'Vortex': 'makes a whirlpool under the finger.',
+    },
+    INJECTION: {
+        'Continuous': 'a steady stream of color.',
+        'Burst': 'a ring of color when you touch down.',
+        'Pulse': 'rhythmic bursts while you hold.',
+        'Spray': 'spray-paint speckles.',
+        'Fountain': 'an upward jet.',
+        'Random': 'random directions and colors.',
+        'Directional': 'a steady jet in the direction you last moved.',
+    },
+    FORCE_FIELD: {
+        'None': 'no force field.',
+        'Vortex': 'everything circles the centre.',
+        'Attractor': 'everything is pulled to the centre.',
+        'Repeller': 'everything is pushed from the centre.',
+        'Spiral': 'everything spirals inward.',
+        'Radial': 'a turning star of rays.',
+        'Wave': 'travelling waves.',
+        'Magnetic': 'two poles, like a bar magnet.',
+    },
+    EDGE: {
+        'Wall': 'fluid stops at the edge.',
+        'Wrap': 'fluid leaving one side comes back on the other.',
+        'Void': 'fluid flows out and is gone.',
+        'Repel': 'the edge pushes fluid back before it arrives.',
+    },
+    TEXT_MODE: {
+        'Paint': 'the letters keep pouring color into the fluid.',
+        'Obstacle': 'the fluid flows around solid letters.',
+    },
+    PERFORMANCE_MODE: {
+        'Battery Saver': '30 frames a second, lower resolution, fewer particles.',
+        'Balanced': '60 frames a second with quality that adapts.',
+        'Performance': 'full resolution, no frame limit.',
+        'Maximum Performance': 'full resolution with the highest effect quality.',
+    },
+};
+
 // ---------- Control descriptions ----------
 
+const described = (key, control) => {
+    control.help = HELP[key];
+    if (OPTION_HELP[key]) control.optionHelp = OPTION_HELP[key];
+    return control;
+};
+
 const ctl = {
-    toggle: (key, label, after, extra) => Object.assign({
+    toggle: (key, label, after, extra) => described(key, Object.assign({
         type: 'toggle', label,
         get: () => config[key],
         set: v => { config[key] = v; if (after) after(v); },
-    }, extra),
-    slider: (key, label, extra) => Object.assign({
+    }, extra)),
+    slider: (key, label, extra) => described(key, Object.assign({
         type: 'slider', label,
         get: () => config[key],
         set: v => { config[key] = v; },
-    }, extra),
+    }, extra)),
     // A 0-100% slider mapped onto a tuned engine value (see PCT)
-    pct: (key, label, extra) => Object.assign({
+    pct: (key, label, extra) => described(key, Object.assign({
         type: 'slider', label,
         get: () => Math.round(Math.min(100, Math.max(0, PCT[key].from(config[PCT[key].cfg])))),
         set: v => { config[PCT[key].cfg] = PCT[key].to(v); },
-    }, extra),
-    select: (key, label, options, after, extra) => Object.assign({
+    }, extra)),
+    select: (key, label, options, after, extra) => described(key, Object.assign({
         type: 'select', label, options,
         get: () => config[key],
         set: v => { config[key] = v; if (after) after(v); },
-    }, extra),
-    color: (key, label, after) => ({
+    }, extra)),
+    color: (key, label, after) => described(key, {
         type: 'color', label,
         get: () => config[key],
         set: v => { config[key] = v; if (after) after(v); },
     }),
-    action: (label, run, extra) => Object.assign({ type: 'action', label, run }, extra),
+    action: (label, run, help, extra) => Object.assign({ type: 'action', label, run, help }, extra),
     heading: label => ({ type: 'heading', label }),
-    note: label => ({ type: 'note', label }),
 };
 
-const shownWhen = (key, control) => Object.assign(control, { visible: () => !!config[key] });
+// Shows the given controls only while test() is true, so a feature's options appear with the feature
+const shownIf = (test, controls) => controls.map(c => Object.assign(c, { visible: test }));
+const on = key => () => !!config[key];
 const centered = (low, high) => v => v === 50 ? 'Neutral' : (v < 50 ? low : high) + ' ' + Math.abs(v - 50) * 2 + '%';
 
 function paletteSwatch (name) {
@@ -3055,6 +3284,7 @@ function showAbout () {
         text: 'An interactive fluid simulation. Built on WebGL Fluid Simulation by Pavel Dobryakov, used under the MIT License below.',
         input: MIT_NOTICE,
         readOnly: true,
+        label: 'License',
         buttons: [{ label: 'Close', primary: true }],
     });
 }
@@ -3068,139 +3298,187 @@ function showPrivacy () {
     });
 }
 
+// The menu. Tabs hold sections; sections hold controls under headings. Options that belong to a
+// feature (bloom intensity, particle size, …) only appear while that feature is switched on.
 function buildTabs () {
     const scene = [
         { type: 'quick', label: 'Quick actions', items: [
-            { label: 'Splash',     icon: 'drop',      title: 'Add random splashes (Space)', run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
-            { label: 'Clear',      icon: 'clear',     title: 'Clear the fluid',             run: () => { clearFluid(); showToast('Cleared'); } },
-            { label: 'Palette',    icon: 'palette',   title: 'Next palette (C)',            run: cyclePalette },
-            { label: 'Auto-play',  icon: 'wave',      title: 'Auto-play (A)',               run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
-            { label: 'Vortex',     icon: 'vortex',    title: 'Vortex (V)',                  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
-            { label: 'Particles',  icon: 'particles', title: 'Particles (O)',               run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
-            { label: 'Trails',     icon: 'physics',   title: 'Color trails (T)',            run: () => toggleMode('TRAILS', 'Color trails'), on: () => config.TRAILS },
-            { label: 'Blacklight', icon: 'sparkle',   title: 'Blacklight (B)',              run: () => toggleMode('BLACKLIGHT', 'Blacklight'), on: () => config.BLACKLIGHT },
+            { label: 'Splash',     icon: 'drop',      help: 'Adds a handful of random bursts of color.',    title: 'Add random splashes (Space)', run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
+            { label: 'Clear',      icon: 'clear',     help: 'Wipes the fluid clean.',                       title: 'Clear the fluid',             run: () => { clearFluid(); showToast('Cleared'); } },
+            { label: 'Palette',    icon: 'palette',   help: 'Switches to the next color palette.',          title: 'Next palette (C)',            run: cyclePalette },
+            { label: 'Auto-play',  icon: 'wave',      help: 'Three streams paint by themselves.',           title: 'Auto-play (A)',               run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
+            { label: 'Vortex',     icon: 'vortex',    help: 'Orbiting arms stir a continuous whirlpool.',   title: 'Vortex (V)',                  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
+            { label: 'Particles',  icon: 'particles', help: 'Thousands of particles ride the fluid.',       title: 'Particles (O)',               run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
+            { label: 'Trails',     icon: 'physics',   help: 'Color fades slowly and leaves long trails.',   title: 'Color trails (T)',            run: () => toggleMode('TRAILS', 'Color trails'), on: () => config.TRAILS },
+            { label: 'Blacklight', icon: 'bulb',      help: 'Fluorescent colors under ultraviolet light.',  title: 'Blacklight (B)',              run: () => toggleMode('BLACKLIGHT', 'Blacklight'), on: () => config.BLACKLIGHT },
         ] },
-        ctl.select('SIM_MODE', 'Simulation mode', SIM_MODE_NAMES, null, {
+        ctl.heading('Simulation'),
+        ctl.select('SIM_MODE', 'Mode', SIM_MODE_NAMES, null, {
             chips: true,
             set: v => { applySimMode(v); showToast('Mode · ' + v); },
         }),
         ctl.pct('SPEED', 'Speed', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.heading('Symmetry'),
         ctl.select('MIRROR_MODE', 'Mirror', MIRROR_MODES, v => { if (v !== 'None') config.KALEIDOSCOPE = false; }, { chips: true }),
         ctl.toggle('KALEIDOSCOPE', 'Kaleidoscope', v => { if (v) config.MIRROR_MODE = 'None'; }),
-        shownWhen('KALEIDOSCOPE', ctl.select('KALEIDO_SEGMENTS', 'Segments', SEGMENT_CHOICES, null, { chips: true })),
+        ...shownIf(on('KALEIDOSCOPE'), [
+            ctl.select('KALEIDO_SEGMENTS', 'Segments', SEGMENT_CHOICES, null, { chips: true }),
+        ]),
     ];
 
     const touch = [
+        ctl.heading('What a touch does'),
         ctl.select('GESTURE', 'Gesture', GESTURE_MODES, null, { chips: true }),
-        ctl.select('INJECTION', 'Injection', INJECTION_MODES, null, { chips: true }),
+        ctl.select('INJECTION', 'Color release', INJECTION_MODES, null, { chips: true }),
+        ctl.toggle('CONTINUOUS_DRAWING', 'Keep drawing while held still'),
+        ctl.toggle('RANDOM_INJECTION', 'Random color for each touch'),
+        ctl.heading('Strength'),
         ctl.pct('TOUCH_FORCE', 'Force', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
         ctl.slider('TOUCH_RADIUS', 'Radius'),
         ctl.slider('TOUCH_SENSITIVITY', 'Sensitivity'),
+        ctl.slider('MULTI_TOUCH', 'Multi-touch strength'),
+        ctl.heading('Pull and push'),
         ctl.slider('TOUCH_ATTRACTION', 'Attraction'),
         ctl.slider('TOUCH_REPULSION', 'Repulsion'),
-        ctl.slider('MULTI_TOUCH', 'Multi-touch strength'),
-        ctl.toggle('CONTINUOUS_DRAWING', 'Keep drawing while held still'),
-        ctl.toggle('RANDOM_INJECTION', 'Random color for each touch'),
     ];
 
-    const color = [
+    const palette = [
         ctl.select('PALETTE', 'Palette', PALETTE_NAMES, null, { swatch: paletteSwatch, set: v => setPalette(v, 1.2) }),
+        ctl.toggle('COLORFUL', 'Keep changing color'),
+        ctl.heading('Automatic'),
         ctl.toggle('AUTO_TRANSITION', 'Change palette automatically'),
-        shownWhen('AUTO_TRANSITION', ctl.select('TRANSITION_TIME', 'Time per palette', TRANSITION_CHOICES, null, { chips: true })),
+        ...shownIf(on('AUTO_TRANSITION'), [
+            ctl.select('TRANSITION_TIME', 'Time per palette', TRANSITION_CHOICES, null, { chips: true }),
+        ]),
         ctl.toggle('RAINBOW', 'Rainbow'),
-        shownWhen('RAINBOW', ctl.pct('RAINBOW_SPD', 'Rainbow speed')),
-        ctl.toggle('COLORFUL', 'Color cycling'),
-    ];
-
-    const lighting = [
-        ctl.toggle('SHADING', 'Shading'),
-        ctl.toggle('BLOOM', 'Bloom'),
-        shownWhen('BLOOM', ctl.pct('BLOOM_INT', 'Bloom intensity')),
-        shownWhen('BLOOM', ctl.pct('BLOOM_THR', 'Bloom threshold')),
-        ctl.slider('GLOW_INTENSITY', 'Glow'),
-        ctl.slider('GLOW_RADIUS', 'Glow radius'),
-        ctl.toggle('SUNRAYS', 'Sunrays'),
-        shownWhen('SUNRAYS', ctl.pct('SUNRAYS_W', 'Sunrays weight')),
-        ctl.toggle('FLARE', 'Lens flare'),
-        shownWhen('FLARE', ctl.select('FLARE_STYLE', 'Flare style', FLARE_STYLES)),
-        ctl.toggle('SPECULAR', 'Specular highlights'),
-        shownWhen('SPECULAR', ctl.select('SPECULAR_STYLE', 'Specular style', Object.keys(SPECULAR_STYLES))),
-        ctl.slider('REFLECTION', 'Reflection'),
-        ctl.slider('REFRACTION', 'Refraction'),
-        ctl.slider('DEPTH', 'Depth'),
-        ctl.slider('TRANSPARENCY', 'Transparency'),
-    ];
-
-    const blacklight = [
-        ctl.toggle('BLACKLIGHT', 'Blacklight'),
-        ctl.slider('BLACKLIGHT_INTENSITY', 'Intensity'),
-        ctl.slider('FLUORESCENCE', 'Fluorescence'),
-        ctl.select('UV_MODE', 'UV color', Object.keys(UV_MODES), null, { chips: true }),
-    ];
-
-    const filters = [
-        ctl.toggle('GAMMA', 'Tone mapping'),
-        shownWhen('GAMMA', ctl.select('GAMMA_MODE', 'Tone', GAMMA_MODES)),
-        ctl.slider('SATURATION', 'Saturation', { format: centered('Less', 'More') }),
-        ctl.slider('CONTRAST', 'Contrast', { format: centered('Less', 'More') }),
-        ctl.slider('COLOR_VARIATION', 'Color variation'),
-        ctl.slider('BLUR', 'Blur'),
-        ctl.slider('SHARPEN', 'Sharpen'),
-        ctl.slider('CHROMATIC_ABERRATION', 'Chromatic aberration'),
-        ctl.toggle('FRINGE', 'Lens fringe'),
-        ctl.toggle('NEON', 'Neon outlines'),
-        ctl.toggle('EMBOSS', 'Emboss'),
-        ctl.toggle('PIXELS', 'Pixelate'),
-        shownWhen('PIXELS', ctl.select('PIXEL_MODE', 'Pixel size', Object.keys(PIXEL_MODES))),
-        ctl.toggle('FILTER', 'Film look'),
-        ctl.toggle('INVERT', 'Invert'),
-        ctl.toggle('MOTION', 'Motion echoes'),
-        shownWhen('MOTION', ctl.select('MOTION_STYLE', 'Echo style', MOTION_STYLES)),
-        shownWhen('MOTION', ctl.slider('MOTION_INTENSITY', 'Echo strength')),
-        ctl.toggle('SHAKE', 'Shake', v => {
-            if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
-        }),
-        shownWhen('SHAKE', ctl.select('SHAKE_STYLE', 'Shake style', Object.keys(SHAKE_STYLES))),
+        ...shownIf(on('RAINBOW'), [ctl.pct('RAINBOW_SPD', 'Rainbow speed')]),
     ];
 
     const background = [
         ctl.select('BACKGROUND', 'Background', BACKGROUND_NAMES, null, { swatch: backgroundSwatch }),
         ctl.color('BACK_COLOR', 'Custom color', () => { config.BACKGROUND = 'Custom'; }),
+        ctl.heading('Adjust'),
         ctl.slider('BG_BRIGHTNESS', 'Brightness', { format: centered('Darker', 'Brighter') }),
-        ctl.slider('BG_BLUR', 'Blur'),
         ctl.slider('BG_OPACITY', 'Opacity'),
+        ctl.slider('BG_BLUR', 'Blurred fluid behind'),
+    ];
+
+    const blacklight = [
+        ctl.toggle('BLACKLIGHT', 'Blacklight'),
+        ...shownIf(on('BLACKLIGHT'), [
+            ctl.select('UV_MODE', 'UV color', Object.keys(UV_MODES), null, { chips: true }),
+            ctl.slider('BLACKLIGHT_INTENSITY', 'Intensity'),
+            ctl.slider('FLUORESCENCE', 'Fluorescence'),
+        ]),
+    ];
+
+    const light = [
+        ctl.heading('Bloom'),
+        ctl.toggle('BLOOM', 'Bloom'),
+        ...shownIf(on('BLOOM'), [
+            ctl.pct('BLOOM_INT', 'Bloom intensity'),
+            ctl.pct('BLOOM_THR', 'Bloom threshold'),
+        ]),
+        ctl.heading('Glow'),
+        ctl.slider('GLOW_INTENSITY', 'Glow'),
+        Object.assign(ctl.slider('GLOW_RADIUS', 'Glow radius'), { visible: () => config.GLOW_INTENSITY > 0 }),
+        ctl.heading('Rays and flare'),
+        ctl.toggle('SUNRAYS', 'Sunrays'),
+        ...shownIf(on('SUNRAYS'), [ctl.pct('SUNRAYS_W', 'Sunrays strength')]),
+        ctl.toggle('FLARE', 'Lens flare'),
+        ...shownIf(on('FLARE'), [ctl.select('FLARE_STYLE', 'Flare style', FLARE_STYLES, null, { chips: true })]),
+    ];
+
+    const surface = [
+        ctl.toggle('SHADING', 'Shading'),
+        ctl.toggle('SPECULAR', 'Shiny highlights'),
+        ...shownIf(on('SPECULAR'), [ctl.select('SPECULAR_STYLE', 'Highlight style', Object.keys(SPECULAR_STYLES))]),
+        ctl.heading('Material'),
+        ctl.slider('DEPTH', 'Depth'),
+        ctl.slider('REFLECTION', 'Reflection'),
+        ctl.slider('REFRACTION', 'Refraction'),
+        ctl.slider('TRANSPARENCY', 'Transparency'),
+    ];
+
+    const tone = [
+        ctl.slider('SATURATION', 'Saturation', { format: centered('Less', 'More') }),
+        ctl.slider('CONTRAST', 'Contrast', { format: centered('Less', 'More') }),
+        ctl.slider('COLOR_VARIATION', 'Color variation'),
+        ctl.heading('Looks'),
+        ctl.toggle('GAMMA', 'Tone mapping'),
+        ...shownIf(on('GAMMA'), [ctl.select('GAMMA_MODE', 'Tone', GAMMA_MODES, null, { chips: true })]),
+        ctl.toggle('FILTER', 'Film look'),
+        ctl.toggle('INVERT', 'Invert colors'),
+    ];
+
+    const stylize = [
+        ctl.heading('Sharpness'),
+        ctl.slider('BLUR', 'Blur'),
+        ctl.slider('SHARPEN', 'Sharpen'),
+        ctl.heading('Lens'),
+        ctl.slider('CHROMATIC_ABERRATION', 'Color split'),
+        ctl.toggle('FRINGE', 'Lens fringe'),
+        ctl.heading('Art styles'),
+        ctl.toggle('NEON', 'Neon outlines'),
+        ctl.toggle('EMBOSS', 'Emboss'),
+        ctl.toggle('PIXELS', 'Pixelate'),
+        ...shownIf(on('PIXELS'), [ctl.select('PIXEL_MODE', 'Pixel size', Object.keys(PIXEL_MODES), null, { chips: true })]),
+    ];
+
+    const motion = [
+        ctl.toggle('MOTION', 'Motion echoes'),
+        ...shownIf(on('MOTION'), [
+            ctl.select('MOTION_STYLE', 'Echo style', MOTION_STYLES),
+            ctl.slider('MOTION_INTENSITY', 'Echo strength'),
+        ]),
+        ctl.toggle('SHAKE', 'Screen shake', v => {
+            if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
+        }),
+        ...shownIf(on('SHAKE'), [ctl.select('SHAKE_STYLE', 'Shake strength', Object.keys(SHAKE_STYLES))]),
     ];
 
     const fluid = [
-        ctl.pct('RADIUS', 'Splat radius'),
+        ctl.heading('Color'),
+        ctl.pct('RADIUS', 'Blob size'),
         ctl.pct('DISSIPATION', 'Fade time', { format: v => fadeSeconds(v).toFixed(1) + ' s' }),
-        ctl.toggle('TRAILS', 'Color trails'),
-        ctl.slider('VISCOSITY', 'Viscosity'),
-        ctl.pct('VORTICITY', 'Vorticity'),
+        ctl.toggle('TRAILS', 'Long color trails'),
+        ctl.heading('Motion'),
+        ctl.slider('VISCOSITY', 'Thickness'),
+        ctl.pct('VORTICITY', 'Curl'),
         ctl.pct('DRAG', 'Drag'),
-        ctl.slider('FLOW_STRENGTH', 'Flow strength'),
-        ctl.select('PRESSURE_LEVEL', 'Pressure solver', Object.keys(PRESSURE_LEVELS)),
+        ctl.slider('FLOW_STRENGTH', 'Flow strength', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.heading('Pressure'),
+        ctl.select('PRESSURE_LEVEL', 'Pressure accuracy', Object.keys(PRESSURE_LEVELS)),
         ctl.pct('PRESSURE_STR', 'Pressure strength'),
     ];
 
     const forces = [
+        ctl.heading('Weight'),
         ctl.slider('GRAVITY', 'Gravity'),
         ctl.slider('BUOYANCY', 'Buoyancy', { format: centered('Sinks', 'Rises') }),
+        ctl.heading('Stirring'),
         ctl.slider('TURBULENCE', 'Turbulence'),
         ctl.slider('SWIRL', 'Swirl'),
         ctl.slider('ELASTICITY', 'Elasticity'),
         ctl.slider('RANDOMNESS', 'Randomness'),
-        ctl.select('FLOW_DIRECTION', 'Flow direction', Object.keys(FLOW_DIRECTIONS)),
-        ctl.slider('FLOW_SPEED', 'Flow speed'),
-        ctl.select('FORCE_FIELD', 'Force field', FORCE_FIELDS, null, { chips: true }),
-        ctl.slider('FIELD_STRENGTH', 'Field strength'),
+        ctl.heading('Current'),
+        ctl.select('FLOW_DIRECTION', 'Direction', Object.keys(FLOW_DIRECTIONS)),
+        Object.assign(ctl.slider('FLOW_SPEED', 'Current speed'), { visible: () => config.FLOW_DIRECTION !== 'None' }),
+        ctl.heading('Force field'),
+        ctl.select('FORCE_FIELD', 'Field', FORCE_FIELDS, null, { chips: true }),
+        Object.assign(ctl.slider('FIELD_STRENGTH', 'Field strength'), { visible: () => config.FORCE_FIELD !== 'None' }),
     ];
 
+    const repelling = () => config.EDGE === 'Repel' || config.CORNER === 'Repel';
     const edges = [
         ctl.select('EDGE', 'Edges', EDGE_MODES, onEdgeChange),
         ctl.select('CORNER', 'Corners', CORNER_MODES, null, { chips: true }),
-        ctl.slider('REPEL_STRENGTH', 'Repel strength'),
-        ctl.slider('REPEL_DISTANCE', 'Repel distance'),
+        ...shownIf(repelling, [
+            ctl.heading('Repel'),
+            ctl.slider('REPEL_STRENGTH', 'Repel strength'),
+            ctl.slider('REPEL_DISTANCE', 'Repel distance'),
+        ]),
+        ctl.heading('Feel'),
         ctl.slider('EDGE_BOUNCE', 'Bounce'),
         ctl.slider('EDGE_FRICTION', 'Friction'),
         ctl.slider('EDGE_SOFTNESS', 'Softness'),
@@ -3208,40 +3486,55 @@ function buildTabs () {
 
     const parts = [
         ctl.toggle('PARTICLES', 'Particles'),
-        ctl.select('PARTICLE_STYLE', 'Style', PARTICLE_STYLES, null, { chips: true }),
-        ctl.select('PARTICLE_AMOUNT', 'Amount', Object.keys(PARTICLE_AMOUNTS)),
-        ctl.select('PARTICLE_COLOR_MODE', 'Color mode', PARTICLE_COLOR_MODES),
-        Object.assign(ctl.color('PARTICLE_COLOR', 'Single color'), { visible: () => config.PARTICLE_COLOR_MODE === 'Single Color' }),
-        ctl.slider('PARTICLE_MIX', 'Mix with fluid', { format: v => v === 50 ? 'Both' : v < 50 ? 'Fluid ' + (100 - v) + '%' : 'Particles ' + v + '%' }),
-        ctl.slider('PARTICLE_INTENSITY', 'Brightness'),
-        ctl.slider('PARTICLE_SIZE', 'Size'),
-        ctl.slider('PARTICLE_LENGTH', 'Streak length'),
-        ctl.slider('PARTICLE_GLOW', 'Glow'),
-        ctl.slider('PARTICLE_SPEED', 'Speed'),
-        ctl.slider('PARTICLE_DENSITY', 'Density'),
-        ctl.slider('PARTICLE_SPREAD', 'Spread'),
-        ctl.slider('PARTICLE_FADE', 'Fade'),
-        ctl.slider('PARTICLE_TURBULENCE', 'Turbulence'),
-        ctl.slider('PARTICLE_ATTRACTION', 'Attraction'),
-        ctl.toggle('PARTICLE_COLLISION', 'Collision'),
-        ctl.toggle('PARTICLE_TRAILS', 'Trails'),
+        ...shownIf(on('PARTICLES'), [
+            ctl.select('PARTICLE_STYLE', 'Style', PARTICLE_STYLES, null, { chips: true }),
+            ctl.select('PARTICLE_AMOUNT', 'Amount', Object.keys(PARTICLE_AMOUNTS)),
+            ctl.slider('PARTICLE_MIX', 'Balance with the fluid', { format: v => v === 50 ? 'Both' : v < 50 ? 'Fluid ' + (100 - v) + '%' : 'Particles ' + v + '%' }),
+            ctl.heading('Color'),
+            ctl.select('PARTICLE_COLOR_MODE', 'Color mode', PARTICLE_COLOR_MODES),
+        ]),
+        Object.assign(ctl.color('PARTICLE_COLOR', 'Single color'), { visible: () => config.PARTICLES && config.PARTICLE_COLOR_MODE === 'Single Color' }),
+        ...shownIf(on('PARTICLES'), [
+            ctl.slider('PARTICLE_INTENSITY', 'Brightness'),
+            ctl.slider('PARTICLE_GLOW', 'Glow'),
+            ctl.heading('Shape'),
+            ctl.slider('PARTICLE_SIZE', 'Size'),
+            ctl.slider('PARTICLE_LENGTH', 'Streak length'),
+            ctl.toggle('PARTICLE_TRAILS', 'Trails'),
+            ctl.heading('Movement'),
+            ctl.slider('PARTICLE_SPEED', 'Speed'),
+            ctl.slider('PARTICLE_TURBULENCE', 'Jitter'),
+            ctl.slider('PARTICLE_ATTRACTION', 'Attraction'),
+            ctl.toggle('PARTICLE_COLLISION', 'Collision'),
+            ctl.heading('Where and how long'),
+            ctl.slider('PARTICLE_SPREAD', 'Spread'),
+            ctl.slider('PARTICLE_DENSITY', 'Density'),
+            ctl.slider('PARTICLE_FADE', 'Fade'),
+        ]),
     ];
 
     const text = [
         ctl.toggle('TEXT', 'Show text'),
-        ctl.action('Edit text', editText, { icon: 'edit' }),
-        ctl.select('TEXT_MODE', 'Mode', TEXT_MODES),
-        ctl.select('TEXT_FONT', 'Font', Object.keys(TEXT_FONTS)),
-        ctl.slider('TEXT_SIZE', 'Size'),
-        ctl.color('TEXT_COLOR', 'Color'),
-        ctl.slider('TEXT_OPACITY', 'Opacity'),
-        ctl.toggle('TEXT_OUTLINE', 'Outline'),
-        shownWhen('TEXT_OUTLINE', ctl.slider('TEXT_OUTLINE_THICKNESS', 'Outline width')),
-        ctl.toggle('TEXT_GLOW', 'Glow'),
-        shownWhen('TEXT_GLOW', ctl.slider('TEXT_GLOW_INTENSITY', 'Glow strength')),
-        ctl.slider('TEXT_X', 'Position across'),
-        ctl.slider('TEXT_Y', 'Position down'),
-        ctl.slider('TEXT_ROTATION', 'Rotation', { format: v => Math.round((v - 50) * 3.6) + '°' }),
+        ctl.action('Edit text', editText, 'Type the words to show. New lines start a new row.', { icon: 'edit' }),
+        ...shownIf(on('TEXT'), [
+            ctl.select('TEXT_MODE', 'Behavior', TEXT_MODES),
+            ctl.heading('Letters'),
+            ctl.select('TEXT_FONT', 'Font', Object.keys(TEXT_FONTS)),
+            ctl.slider('TEXT_SIZE', 'Size'),
+            ctl.color('TEXT_COLOR', 'Color'),
+            ctl.slider('TEXT_OPACITY', 'Opacity'),
+            ctl.heading('Outline and glow'),
+            ctl.toggle('TEXT_OUTLINE', 'Outline'),
+        ]),
+        ...shownIf(() => config.TEXT && config.TEXT_OUTLINE, [ctl.slider('TEXT_OUTLINE_THICKNESS', 'Outline width')]),
+        ...shownIf(on('TEXT'), [ctl.toggle('TEXT_GLOW', 'Glow')]),
+        ...shownIf(() => config.TEXT && config.TEXT_GLOW, [ctl.slider('TEXT_GLOW_INTENSITY', 'Glow strength')]),
+        ...shownIf(on('TEXT'), [
+            ctl.heading('Position'),
+            ctl.slider('TEXT_X', 'Across'),
+            ctl.slider('TEXT_Y', 'Down'),
+            ctl.slider('TEXT_ROTATION', 'Rotation', { format: v => Math.round((v - 50) * 3.6) + '°' }),
+        ]),
     ];
 
     const performance = [
@@ -3249,62 +3542,78 @@ function buildTabs () {
             chips: true,
             set: v => { applyPerformanceMode(v); showToast('Performance · ' + v); },
         }),
-        ctl.select('DYE_RESOLUTION', 'Quality', QUALITY_LEVELS, initFramebuffers),
-        ctl.select('SIM_RESOLUTION', 'Simulation detail', SIM_RESOLUTIONS, initFramebuffers),
-        ctl.select('FPS_LIMIT', 'Frame rate limit', Object.keys(FPS_LIMITS)),
-        ctl.slider('RENDER_SCALE', 'Render scale'),
-        ctl.select('EFFECT_QUALITY', 'Effect quality', EFFECT_NAMES),
-        ctl.select('PARTICLE_LIMIT', 'Particle limit', Object.keys(PARTICLE_AMOUNTS)),
-        ctl.toggle('ADAPTIVE_QUALITY', 'Adaptive quality'),
         ctl.toggle('BATTERY_SAVER', 'Battery saver'),
+        ctl.toggle('ADAPTIVE_QUALITY', 'Adaptive quality'),
+        ctl.heading('Detail'),
+        ctl.select('DYE_RESOLUTION', 'Color sharpness', QUALITY_LEVELS, initFramebuffers),
+        ctl.select('SIM_RESOLUTION', 'Motion detail', SIM_RESOLUTIONS, initFramebuffers),
+        ctl.select('EFFECT_QUALITY', 'Effect quality', EFFECT_NAMES),
+        ctl.slider('RENDER_SCALE', 'Render scale'),
+        ctl.heading('Limits'),
+        ctl.select('FPS_LIMIT', 'Frame rate limit', Object.keys(FPS_LIMITS)),
+        ctl.select('PARTICLE_LIMIT', 'Particle limit', Object.keys(PARTICLE_AMOUNTS)),
     ];
 
     const capture = [
-        ctl.action(platform.isNative ? 'Save image to gallery' : 'Save image', captureScreenshot, { icon: 'camera', primary: true }),
-        Object.assign(ctl.action('Share image', shareScreenshot, { icon: 'share' }), { visible: () => platform.canShare() }),
+        ctl.action(platform.isNative ? 'Save image to gallery' : 'Save image', captureScreenshot,
+            'Saves the picture as it is now, without the controls.', { icon: 'camera', primary: true }),
+        ...(platform.canShare() ? [ctl.action('Share image', shareScreenshot, 'Sends the picture to another app.', { icon: 'share' })] : []),
         ctl.select('CAPTURE_RESOLUTION', 'Image size', CAPTURE_SIZES),
         ctl.toggle('TRANSPARENT', 'Transparent background in images'),
-        ctl.heading('Ambient'),
+        ctl.heading('Living display'),
         ctl.toggle('SPLASHES', 'Gentle automatic splashes'),
         ctl.toggle('WALLPAPER_CLEAR', 'Start fresh when you come back'),
-        ctl.action('Hide the controls', () => window.RipplUI.setHidden(true), { icon: 'hide' }),
-        Object.assign(ctl.action('Fullscreen', toggleFullscreen, { icon: 'expand' }), { visible: () => !platform.isNative }),
-        ctl.action('Use as a wallpaper', showWallpaperInfo, { icon: 'phone' }),
+        ctl.action('Hide the controls', () => window.RipplUI.setHidden(true),
+            'Shows only the fluid. Tap the small arrow at the bottom to bring the controls back.', { icon: 'hide' }),
+        ...(platform.isNative ? [] : [ctl.action('Fullscreen', toggleFullscreen, 'Fills the whole screen, hiding the browser.', { icon: 'expand' })]),
+        ctl.action('Use as a wallpaper', showWallpaperInfo, 'How to use RIPPL Studio as a wallpaper or a living display.', { icon: 'phone' }),
     ];
 
     const app = [
         { type: 'toggle', label: 'Haptic feedback',
+          help: 'A light vibration when you tap a control.',
           get: () => deviceSettings.HAPTICS,
           set: v => { deviceSettings.HAPTICS = v; platform.setHaptics(v); } },
-        { type: 'toggle', label: 'Keep the screen on', get: () => deviceSettings.KEEP_AWAKE, set: setKeepAwake },
+        { type: 'toggle', label: 'Keep the screen on',
+          help: 'Stops the screen from dimming or locking while RIPPL Studio is open.',
+          get: () => deviceSettings.KEEP_AWAKE, set: setKeepAwake },
         ctl.heading('About'),
-        ctl.action('About RIPPL Studio', showAbout, { icon: 'logo' }),
-        ctl.action('Privacy', showPrivacy, { icon: 'look' }),
+        ctl.action('About RIPPL Studio', showAbout, 'Version, credits and license.', { icon: 'logo' }),
+        ctl.action('Privacy', showPrivacy, 'What RIPPL Studio does with your data: nothing leaves your device.', { icon: 'look' }),
     ];
 
-    const one = controls => [{ id: 'main', label: '', controls }];
     return [
-        { id: 'presets', label: 'Presets', icon: 'presets', custom: 'presets' },
-        { id: 'scene', label: 'Scene', icon: 'scene', sections: one(scene) },
-        { id: 'touch', label: 'Touch', icon: 'touch', sections: one(touch) },
-        { id: 'look', label: 'Look', icon: 'look', sections: [
-            { id: 'color', label: 'Color', controls: color },
-            { id: 'lighting', label: 'Lighting', controls: lighting },
-            { id: 'blacklight', label: 'Blacklight', controls: blacklight },
-            { id: 'filters', label: 'Filters', controls: filters },
-            { id: 'background', label: 'Background', controls: background },
+        { id: 'presets', label: 'Presets', icon: 'presets', custom: 'presets',
+          help: 'Saved looks. Tap one to use it; save your own from the current settings.' },
+        { id: 'scene', label: 'Scene', icon: 'scene', sections: [
+            { id: 'scene', label: 'Scene', controls: scene, help: 'What is happening on screen.' },
+            { id: 'touch', label: 'Touch', controls: touch, help: 'What your fingers do to the fluid.' },
+        ] },
+        { id: 'color', label: 'Color', icon: 'palette', sections: [
+            { id: 'palette', label: 'Palette', controls: palette, help: 'The colors the fluid is painted with.' },
+            { id: 'background', label: 'Background', controls: background, help: 'What sits behind the fluid.' },
+            { id: 'blacklight', label: 'Blacklight', controls: blacklight, help: 'Fluorescent paint under ultraviolet light.' },
+        ] },
+        { id: 'effects', label: 'Effects', icon: 'sparkle', sections: [
+            { id: 'light', label: 'Light', controls: light, help: 'Glow and light that spills from the bright areas.' },
+            { id: 'surface', label: 'Surface', controls: surface, help: 'How the surface of the fluid catches the light.' },
+            { id: 'tone', label: 'Tone', controls: tone, help: 'Overall color and brightness of the picture.' },
+            { id: 'stylize', label: 'Stylize', controls: stylize, help: 'Filters that change the style of the whole picture.' },
+            { id: 'motion', label: 'Motion', controls: motion, help: 'Effects that follow movement.' },
         ] },
         { id: 'physics', label: 'Physics', icon: 'physics', sections: [
-            { id: 'fluid', label: 'Fluid', controls: fluid },
-            { id: 'forces', label: 'Forces', controls: forces },
-            { id: 'edges', label: 'Edges', controls: edges },
+            { id: 'fluid', label: 'Fluid', controls: fluid, help: 'How the fluid itself behaves.' },
+            { id: 'forces', label: 'Forces', controls: forces, help: 'Forces that act on the fluid without you touching it.' },
+            { id: 'edges', label: 'Edges', controls: edges, help: 'What happens at the edges of the screen.' },
         ] },
-        { id: 'particles', label: 'Particles', icon: 'particles', sections: one(parts) },
-        { id: 'text', label: 'Text', icon: 'text', sections: one(text) },
+        { id: 'layers', label: 'Layers', icon: 'layers', sections: [
+            { id: 'particles', label: 'Particles', controls: parts, help: 'Small particles that ride on the fluid.' },
+            { id: 'text', label: 'Text', controls: text, help: 'Words that paint into the fluid or stand in its way.' },
+        ] },
         { id: 'system', label: 'System', icon: 'system', sections: [
-            { id: 'performance', label: 'Performance', controls: performance },
-            { id: 'capture', label: 'Capture', controls: capture },
-            { id: 'app', label: 'App', controls: app },
+            { id: 'performance', label: 'Performance', controls: performance, help: 'Trade picture quality against speed and battery.' },
+            { id: 'capture', label: 'Capture', controls: capture, help: 'Save and share images, or let the app run as a display.' },
+            { id: 'app', label: 'App', controls: app, help: 'Settings for the app itself.' },
         ] },
     ];
 }
@@ -3325,7 +3634,7 @@ function startUI () {
             { label: 'Capture', icon: 'camera', title: 'Save an image', run: captureScreenshot },
         ],
         headActions: [
-            { label: 'Undo', icon: 'undo', run: undo },
+            { label: 'Undo the last change', icon: 'undo', run: undo },
             { label: 'Redo', icon: 'redo', run: redo },
         ],
         presets: {
@@ -3335,14 +3644,16 @@ function startUI () {
             preview: presetPreview,
             select: name => { selectPreset(name, true); showToast(name); },
             actions: [
-                { label: 'Save this look', icon: 'save', run: presetSave, primary: true, wide: true },
-                { label: 'Rename', icon: 'edit', run: presetRenamePrompt, disabled: builtinNow },
-                { label: 'Duplicate', icon: 'copy', run: presetClone },
-                { label: 'Share', icon: 'share', run: presetExport },
-                { label: 'Import', icon: 'open', run: presetImport },
-                { label: 'New blank', icon: 'plus', run: presetNew },
-                { label: 'Delete', icon: 'trash', run: presetDelete, danger: true, disabled: builtinNow },
-                { label: 'Reset everything', icon: 'reset', run: resetSimulation, danger: true, wide: true },
+                { label: 'Save this look', icon: 'save', run: presetSave, primary: true, wide: true,
+                  help: 'Keeps the current settings. Updates the selected preset, or makes a new one if a built-in is selected.' },
+                { label: 'Rename', icon: 'edit', run: presetRenamePrompt, disabled: builtinNow, help: 'Gives the selected preset a new name.' },
+                { label: 'Duplicate', icon: 'copy', run: presetClone, help: 'Makes a copy of the current settings as a new preset.' },
+                { label: 'Share', icon: 'share', run: presetExport, help: 'Sends the selected preset to someone, as a file or as text.' },
+                { label: 'Import', icon: 'open', run: presetImport, help: 'Adds a preset someone shared with you.' },
+                { label: 'New blank', icon: 'plus', run: presetNew, help: 'Starts a new preset from the default settings.' },
+                { label: 'Delete', icon: 'trash', run: presetDelete, danger: true, disabled: builtinNow, help: 'Removes the selected preset from this device.' },
+                { label: 'Reset everything', icon: 'reset', run: resetSimulation, danger: true, wide: true,
+                  help: 'Returns to the Default preset and clears the fluid. Undo brings your settings back.' },
             ],
         },
         status: () => presetState.current + ' · ' + config.SIM_MODE + ' · ' + perf.fps + ' fps',
