@@ -423,6 +423,23 @@ describe('particles', () => {
         assert.deepEqual(app.errors, []);
     });
 
+    test('each particle carries its own momentum, kept only while particles are on', () => {
+        start({ storage: WELCOMED });
+        app.run('config.PARTICLES = true');
+        app.frames(3);
+        assert.equal(app.run('!!particles.momentum'), true);
+        assert.equal(app.run('particles.momentum.read.width === particles.state.read.width && particles.momentum.read.height === particles.state.read.height'), true);
+        app.run('config.PARTICLES = false');
+        app.frames(2);
+        assert.equal(app.run('particles.momentum'), null, 'freed with the rest');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('the Speed help no longer says particles follow the fluid', () => {
+        start({ storage: WELCOMED });
+        assert.doesNotMatch(app.run('HELP.PARTICLE_SPEED'), /follow/);
+    });
+
     test('the Spread help says particles come from the fluid', () => {
         start({ storage: WELCOMED });
         assert.match(app.run('HELP.PARTICLE_SPREAD'), /fluid/);

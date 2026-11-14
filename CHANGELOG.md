@@ -6,6 +6,9 @@
 - Particles now come from the fluid itself: each one is born where there is fluid, more of them
   where it is brighter, and none appear on an empty screen. Before, they appeared at random
   places whether or not any fluid was there.
+- Particles fly like firework sparks: each one sets off the way the fluid is moving where it is
+  born, is pushed outward from the center of the fluid, and gradually slows to a stop. Before,
+  they were carried along by the fluid for their whole life.
 
 ## 1.0.1
 

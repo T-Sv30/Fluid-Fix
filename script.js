@@ -1049,12 +1049,17 @@ const PARTICLE_AMOUNTS = {
 const PARTICLE_STYLES = ['Points', 'Lines', 'Trails', 'Circles', 'Glow', 'Sparks', 'Bubbles', 'Dust', 'Orbs', 'Waves'];
 const PARTICLE_COLOR_MODES = ['Fluid Color', 'Single Color', 'Random', 'Velocity-Based', 'Rainbow', 'Gradient', 'Temperature-Based'];
 
+// Particles fly like firework sparks: launched with the fluid, pushed out from its center, slowing down
+const PARTICLE_DRAG = 1.3;    // per second; speed halves about every half second
+const PARTICLE_PUSH = 0.45;   // outward acceleration at the edge of the fluid, screens per second squared
+
 const particles = {
     supported: null,     // decided on first use
     floatType: null,
     internalFormat: null,
     programs: null,
     state: null,         // double FBO: xy = position, z = age (negative = waiting to be born), w = seed
+    momentum: null,      // double FBO: xy = the particle's own velocity, in screens per second
     count: 0,
     width: 0,
     height: 0,
@@ -1092,10 +1097,9 @@ const particleUpdateSource = `
 
     varying vec2 vUv;
     uniform sampler2D uState;
-    uniform sampler2D uVelocity;
+    uniform sampler2D uMomentum;
     uniform sampler2D uDensity;
     uniform sampler2D uDye;
-    uniform vec2 velTexel;
     uniform float dt;
     uniform float time;
     uniform float aspectRatio;
@@ -1117,8 +1121,8 @@ const particleUpdateSource = `
         float seed = s.w;
         bool waiting = age < 0.0;
 
-        // Ride the fluid (velocity is stored in texels per second)
-        vec2 v = texture2D(uVelocity, p).xy * velTexel;
+        // Each particle flies on its own momentum (see the momentum shader)
+        vec2 v = texture2D(uMomentum, vUv).xy;
 
         if (turbulence > 0.0) {
             vec2 q = p * vec2(aspectRatio, 1.0) * 4.0 + vec2(time * 0.2, -time * 0.15) + seed * 0.3;
@@ -1183,17 +1187,69 @@ const particleUpdateSource = `
     }
 `;
 
+const particleMomentumSource = `
+    precision highp float;
+    precision highp sampler2D;
+
+    varying vec2 vUv;
+    uniform sampler2D uState;      // already moved this frame
+    uniform sampler2D uMomentum;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uDye;
+    uniform vec2 velTexel;
+    uniform float dt;
+    uniform float time;
+    uniform float aspectRatio;
+    uniform float drag;
+    uniform float push;
+    ${PARTICLE_GLSL_COMMON}
+
+    float fluidAt (vec2 p) {
+        vec3 d = texture2D(uDye, p).rgb;
+        return max(d.r, max(d.g, d.b));
+    }
+
+    void main () {
+        vec4 s = texture2D(uState, vUv);
+        vec2 p = s.xy;
+        float age = s.z;
+        float seed = s.w;
+        vec2 m = texture2D(uMomentum, vUv).xy;
+        vec2 screen = vec2(aspectRatio, 1.0);
+
+        if (age < 0.0) {
+            m = vec2(0.0);
+        } else if (age == 0.0) {
+            // Just born: launched the way the fluid is moving here (stored in texels per second),
+            // with a small kick in a random direction so the ones at the very center spread too
+            vec2 fluid = texture2D(uVelocity, p).xy * velTexel;
+            float a = phash(vUv * 61.0 + vec2(time * 3.7, seed * 19.3)) * 6.2831853;
+            float kick = (0.02 + 0.2 * length(fluid * screen)) * phash(vUv * 43.0 + vec2(seed * 11.7, time * 9.1));
+            m = fluid + vec2(cos(a), sin(a)) / screen * kick;
+        } else {
+            // Pushed outward, away from where the fluid is thickest, while drag bleeds off speed
+            vec2 e = vec2(0.012) / screen;
+            vec2 g = vec2(fluidAt(p + vec2(e.x, 0.0)) - fluidAt(p - vec2(e.x, 0.0)),
+                          fluidAt(p + vec2(0.0, e.y)) - fluidAt(p - vec2(0.0, e.y)));
+            float steep = length(g);
+            if (steep > 0.0001) m -= g / steep / screen * push * smoothstep(0.0, 0.1, steep) * dt;
+            m *= exp(-drag * dt);
+        }
+
+        gl_FragColor = vec4(m, 0.0, 1.0);
+    }
+`;
+
 const particleVertexSource = `
     precision highp float;
     precision highp sampler2D;
 
     attribute float aVertex;
     uniform sampler2D uState;
-    uniform sampler2D uVelocity;
+    uniform sampler2D uMomentum;
     uniform sampler2D uDye;
     uniform vec2 stateSize;
     uniform float activeCount;
-    uniform vec2 velTexel;
     uniform vec2 viewport;
     uniform float size;
     uniform float lengthScale;
@@ -1244,7 +1300,7 @@ const particleVertexSource = `
             return;
         }
 
-        vec2 v = texture2D(uVelocity, p).xy * velTexel;
+        vec2 v = texture2D(uMomentum, suv).xy;
         vec2 vpx = v * viewport;
         float spd = length(vpx);
         vec2 dir = spd > 0.001 ? vpx / spd : vec2(1.0, 0.0);
@@ -1443,7 +1499,7 @@ function linkParticleProgram (vsSource, fsSource) {
 
 // Particles need float textures we can render into, and texture reads in the vertex shader
 function detectParticleSupport () {
-    // The particle vertex shader reads three textures (state, velocity, color)
+    // The particle vertex shader reads three textures (state, momentum, color)
     if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < 3) return false;
     let internalFormat, type;
     if (isWebGL2Context) {
@@ -1511,18 +1567,17 @@ function setupParticles () {
 
     const { w, h } = particleStateSize(count);
     const data = newParticleState(w, h);
-    const a = createParticleTexture(w, h, data);
-    const b = createParticleTexture(w, h, data);
-    if (particles.state) {
-        [particles.state.read, particles.state.write].forEach(f => {
-            gl.deleteFramebuffer(f.fbo);
-            gl.deleteTexture(f.texture);
-        });
-    }
-    particles.state = {
-        read: a, write: b,
+    const pair = contents => ({
+        read: createParticleTexture(w, h, contents), write: createParticleTexture(w, h, contents),
         swap () { const t = this.read; this.read = this.write; this.write = t; }
-    };
+    });
+    [particles.state, particles.momentum].forEach(old => {
+        if (!old) return;
+        destroyFBO(old.read);
+        destroyFBO(old.write);
+    });
+    particles.state = pair(data);
+    particles.momentum = pair(new Float32Array(w * h * 4));
     particles.count = count;
     particles.width = w;
     particles.height = h;
@@ -1550,14 +1605,15 @@ function ensureParticleTargets () {
 // Frees everything particles use on the GPU; it is rebuilt the next time they are turned on
 function releaseParticles () {
     if (!particles.state && !particles.trail && !particles.density) return;
-    if (particles.state) {
-        destroyFBO(particles.state.read);
-        destroyFBO(particles.state.write);
-    }
+    [particles.state, particles.momentum].forEach(pair => {
+        if (!pair) return;
+        destroyFBO(pair.read);
+        destroyFBO(pair.write);
+    });
     destroyDoubleFBO(particles.trail);
     destroyFBO(particles.density);
     if (particles.vertexBuffer) gl.deleteBuffer(particles.vertexBuffer);
-    particles.state = particles.trail = particles.density = particles.vertexBuffer = null;
+    particles.state = particles.momentum = particles.trail = particles.density = particles.vertexBuffer = null;
     particles.count = 0;
 }
 
@@ -1571,6 +1627,7 @@ function particlesReady () {
         if (particles.supported) {
             particles.programs = {
                 update: new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, particleUpdateSource)),
+                momentum: new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, particleMomentumSource)),
                 draw: linkParticleProgram(particleVertexSource, particleFragmentSource),
                 density: linkParticleProgram(particleDensityVertexSource, particleDensityFragmentSource),
                 fade: new Program(baseVertexShader, compileShader(gl.FRAGMENT_SHADER, trailFadeSource)),
@@ -1642,10 +1699,9 @@ function updateParticles (dt) {
     gl.disable(gl.BLEND);
     u.bind();
     gl.uniform1i(u.uniforms.uState, particles.state.read.attach(0));
-    gl.uniform1i(u.uniforms.uVelocity, velocity.read.attach(1));
+    gl.uniform1i(u.uniforms.uMomentum, particles.momentum.read.attach(1));
     gl.uniform1i(u.uniforms.uDensity, particles.density.attach(2));
     gl.uniform1i(u.uniforms.uDye, dye.read.attach(3));
-    gl.uniform2f(u.uniforms.velTexel, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform2f(u.uniforms.densityTexel, particles.density.texelSizeX * 1.5, particles.density.texelSizeY * 1.5);
     gl.uniform1f(u.uniforms.dt, step);
     gl.uniform1f(u.uniforms.time, particles.time);
@@ -1660,6 +1716,22 @@ function updateParticles (dt) {
     gl.uniform1f(u.uniforms.wrapEdges, effectiveEdgeMode() === 1 ? 1 : 0);
     blit(particles.state.write);
     particles.state.swap();
+
+    // Then each particle's momentum, from where it is now
+    const m = particles.programs.momentum;
+    m.bind();
+    gl.uniform1i(m.uniforms.uState, particles.state.read.attach(0));
+    gl.uniform1i(m.uniforms.uMomentum, particles.momentum.read.attach(1));
+    gl.uniform1i(m.uniforms.uVelocity, velocity.read.attach(2));
+    gl.uniform1i(m.uniforms.uDye, dye.read.attach(3));
+    gl.uniform2f(m.uniforms.velTexel, velocity.texelSizeX, velocity.texelSizeY);
+    gl.uniform1f(m.uniforms.dt, step);
+    gl.uniform1f(m.uniforms.time, particles.time);
+    gl.uniform1f(m.uniforms.aspectRatio, canvas.width / canvas.height);
+    gl.uniform1f(m.uniforms.drag, PARTICLE_DRAG);
+    gl.uniform1f(m.uniforms.push, PARTICLE_PUSH);
+    blit(particles.momentum.write);
+    particles.momentum.swap();
 }
 
 function particleColors () {
@@ -1672,11 +1744,10 @@ function setParticleDrawUniforms (u, width, height) {
     const dpr = pixelRatio();
     const colors = particleColors();
     gl.uniform1i(u.uState, particles.state.read.attach(0));
-    gl.uniform1i(u.uVelocity, velocity.read.attach(1));
+    gl.uniform1i(u.uMomentum, particles.momentum.read.attach(1));
     gl.uniform1i(u.uDye, dye.read.attach(2));
     gl.uniform2f(u.stateSize, particles.width, particles.height);
     gl.uniform1f(u.activeCount, particleActiveCount());
-    gl.uniform2f(u.velTexel, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform2f(u.viewport, width, height);
     gl.uniform1f(u.size, (1 + 23 * Math.pow(config.PARTICLE_SIZE / 100, 1.5)) * dpr * (width / Math.max(gl.drawingBufferWidth, 1)));
     gl.uniform1f(u.lengthScale, config.PARTICLE_LENGTH / 100 * 0.12);
@@ -3212,7 +3283,7 @@ const HELP = {
     PARTICLE_SIZE: 'How big each particle is.',
     PARTICLE_LENGTH: 'How long the streak behind a moving particle is.',
     PARTICLE_GLOW: 'The halo around each particle.',
-    PARTICLE_SPEED: 'How fast particles follow the fluid.',
+    PARTICLE_SPEED: 'How fast particles fly.',
     PARTICLE_DENSITY: 'The share of the particles that is shown.',
     PARTICLE_SPREAD: 'Where particles are born: anywhere there is fluid at the top, only in the fluid around your finger lower down.',
     PARTICLE_FADE: 'How quickly each particle disappears.',
