@@ -414,6 +414,21 @@ describe('device settings', () => {
     });
 });
 
+describe('particles', () => {
+    test('start out waiting for fluid instead of scattered over the screen', () => {
+        start({ storage: WELCOMED });
+        const ages = JSON.parse(app.run('JSON.stringify(Array.from(newParticleState(4, 4)).filter((v, i) => i % 4 === 2))'));
+        assert.equal(ages.length, 16);
+        assert.ok(ages.every(age => age < 0), 'a negative age means "not born yet"');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('the Spread help says particles come from the fluid', () => {
+        start({ storage: WELCOMED });
+        assert.match(app.run('HELP.PARTICLE_SPREAD'), /fluid/);
+    });
+});
+
 describe('staying up on any device', () => {
     const loseGraphics = () => app.$('canvas').dispatchEvent(new app.window.Event('webglcontextlost', { cancelable: true }));
     const restoreGraphics = () => app.$('canvas').dispatchEvent(new app.window.Event('webglcontextrestored'));

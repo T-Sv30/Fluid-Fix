@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- Particles now come from the fluid itself: each one is born where there is fluid, more of them
+  where it is brighter, and none appear on an empty screen. Before, they appeared at random
+  places whether or not any fluid was there.
+
 ## 1.0.1
 
 ### Fixes

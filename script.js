@@ -1054,7 +1054,7 @@ const particles = {
     floatType: null,
     internalFormat: null,
     programs: null,
-    state: null,         // double FBO: xy = position, z = age, w = seed
+    state: null,         // double FBO: xy = position, z = age (negative = waiting to be born), w = seed
     count: 0,
     width: 0,
     height: 0,
@@ -1094,6 +1094,7 @@ const particleUpdateSource = `
     uniform sampler2D uState;
     uniform sampler2D uVelocity;
     uniform sampler2D uDensity;
+    uniform sampler2D uDye;
     uniform vec2 velTexel;
     uniform float dt;
     uniform float time;
@@ -1114,6 +1115,7 @@ const particleUpdateSource = `
         vec2 p = s.xy;
         float age = s.z;
         float seed = s.w;
+        bool waiting = age < 0.0;
 
         // Ride the fluid (velocity is stored in texels per second)
         vec2 v = texture2D(uVelocity, p).xy * velTexel;
@@ -1140,24 +1142,41 @@ const particleUpdateSource = `
             v -= g * collision * smoothstep(0.15, 0.5, here);
         }
 
-        p += v * dt;
-        age += dt;
+        if (!waiting) {
+            p += v * dt;
+            age += dt;
+        }
 
         if (wrapEdges > 0.5) p = fract(p);
 
         float life = lifetime * (0.6 + 0.8 * seed);
         bool outside = p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0;
-        if (age > life || outside) {
-            float r1 = phash(vUv * 97.0 + vec2(time * 13.7, seed * 31.1));
-            float r2 = phash(vUv * 53.0 + vec2(seed * 17.3, time * 7.9));
-            if (spawnMode < 0.5) {
-                p = vec2(r1, r2);
-            } else {
-                float a = r1 * 6.2831853;
-                float rr = sqrt(r2) * spawnRadius;
-                p = clamp(spawnPoint + vec2(cos(a) * rr / aspectRatio, sin(a) * rr), 0.001, 0.999);
+        if (dt > 0.0 && (waiting || age > life || outside)) {
+            // Particles are born from the fluid: try a few places and take the first that has
+            // fluid in it, brighter fluid being more likely. With none found the particle waits,
+            // unseen, and tries again next frame.
+            age = -1.0;
+            for (int i = 0; i < 6; i++) {
+                float k = float(i) * 7.31;
+                float r1 = phash(vUv * 97.0 + vec2(time * 13.7 + k, seed * 31.1));
+                float r2 = phash(vUv * 53.0 + vec2(seed * 17.3 + k, time * 7.9));
+                float r3 = phash(vUv * 71.0 + vec2(time * 5.3, seed * 23.9 + k));
+                vec2 c;
+                if (spawnMode < 0.5) {
+                    c = vec2(r1, r2);
+                } else {
+                    float a = r1 * 6.2831853;
+                    float rr = sqrt(r2) * spawnRadius;
+                    c = clamp(spawnPoint + vec2(cos(a) * rr / aspectRatio, sin(a) * rr), 0.001, 0.999);
+                }
+                vec3 dye = texture2D(uDye, c).rgb;
+                float amount = max(dye.r, max(dye.g, dye.b));
+                if (r3 < smoothstep(0.02, 0.3, amount)) {
+                    p = c;
+                    age = 0.0;
+                    break;
+                }
             }
-            age = 0.0;
         }
 
         gl_FragColor = vec4(p, age, seed);
@@ -1220,6 +1239,10 @@ const particleVertexSource = `
         vec2 p = s.xy;
         float age = s.z;
         float seed = s.w;
+        if (age < 0.0) {   // not born yet
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+        }
 
         vec2 v = texture2D(uVelocity, p).xy * velTexel;
         vec2 vpx = v * viewport;
@@ -1374,8 +1397,9 @@ const particleDensityVertexSource = `
             return;
         }
         vec2 suv = (vec2(mod(idx, stateSize.x), floor(idx / stateSize.x)) + 0.5) / stateSize;
-        vec2 p = texture2D(uState, suv).xy;
-        gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        vec4 s = texture2D(uState, suv);
+        // Particles that are not born yet (negative age) don't count toward crowding
+        gl_Position = s.z < 0.0 ? vec4(2.0, 2.0, 2.0, 1.0) : vec4(s.xy * 2.0 - 1.0, 0.0, 1.0);
         gl_PointSize = 2.0;
     }
 `;
@@ -1469,20 +1493,24 @@ function createParticleTexture (w, h, data) {
     };
 }
 
+// Every particle starts out waiting (negative age) until it finds fluid to be born from
+function newParticleState (w, h) {
+    const data = new Float32Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+        data[i * 4 + 0] = Math.random();
+        data[i * 4 + 1] = Math.random();
+        data[i * 4 + 2] = -1;
+        data[i * 4 + 3] = Math.random();   // seed
+    }
+    return data;
+}
+
 function setupParticles () {
     const count = effParticleCount();
     if (particles.state && particles.count === count) return;
 
     const { w, h } = particleStateSize(count);
-    const data = new Float32Array(w * h * 4);
-    const life = particleLifetime();
-    for (let i = 0; i < w * h; i++) {
-        const seed = Math.random();
-        data[i * 4 + 0] = Math.random();
-        data[i * 4 + 1] = Math.random();
-        data[i * 4 + 2] = Math.random() * life * (0.6 + 0.8 * seed);  // staggered ages
-        data[i * 4 + 3] = seed;
-    }
+    const data = newParticleState(w, h);
     const a = createParticleTexture(w, h, data);
     const b = createParticleTexture(w, h, data);
     if (particles.state) {
@@ -1604,7 +1632,7 @@ function updateParticles (dt) {
         gl.disable(gl.BLEND);
     }
 
-    // Spawn around the first finger when Spread is below 100%
+    // Particles are born in the fluid: anywhere at 100% Spread, near the first finger below that
     const spread = config.PARTICLE_SPREAD / 100;
     const finger = pointers.find(p => p.down);
     const spawnAround = spread < 0.999;
@@ -1616,6 +1644,7 @@ function updateParticles (dt) {
     gl.uniform1i(u.uniforms.uState, particles.state.read.attach(0));
     gl.uniform1i(u.uniforms.uVelocity, velocity.read.attach(1));
     gl.uniform1i(u.uniforms.uDensity, particles.density.attach(2));
+    gl.uniform1i(u.uniforms.uDye, dye.read.attach(3));
     gl.uniform2f(u.uniforms.velTexel, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform2f(u.uniforms.densityTexel, particles.density.texelSizeX * 1.5, particles.density.texelSizeY * 1.5);
     gl.uniform1f(u.uniforms.dt, step);
@@ -3185,7 +3214,7 @@ const HELP = {
     PARTICLE_GLOW: 'The halo around each particle.',
     PARTICLE_SPEED: 'How fast particles follow the fluid.',
     PARTICLE_DENSITY: 'The share of the particles that is shown.',
-    PARTICLE_SPREAD: 'Where particles appear: the whole screen at the top, around your finger lower down.',
+    PARTICLE_SPREAD: 'Where particles are born: anywhere there is fluid at the top, only in the fluid around your finger lower down.',
     PARTICLE_FADE: 'How quickly each particle disappears.',
     PARTICLE_TURBULENCE: 'Adds jitter to particle paths.',
     PARTICLE_ATTRACTION: 'Makes particles drift toward each other.',
