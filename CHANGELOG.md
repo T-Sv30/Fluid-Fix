@@ -3,9 +3,10 @@
 ## Unreleased
 
 ### Changes
-- **Change color with age** (Color > Palette): choose a starting, middle and final color and the
-  fluid shifts through them as it gets older, over a time you set from 1 to 30 seconds. The three
-  colors take the place of the palette while it is on, and are saved with presets.
+- **Change color with age** (Color > Palette): choose up to eight colors and the fluid shifts
+  through them as it gets older, over a time you set from 1 to 30 seconds. **Saturation** sets
+  how strong the colors are and **Change sharpness** how suddenly each one gives way to the next.
+  The colors take the place of the palette while it is on, and are saved with presets.
 - Particles now come from the fluid itself: each one is born where there is fluid, more of them
   where it is brighter, and none appear on an empty screen. Before, they appeared at random
   places whether or not any fluid was there.
