@@ -35,6 +35,13 @@ Repository → Settings → Secrets and variables → Actions:
 
 New personal developer accounts must run a **closed test with at least 12 testers for 14 days** before Google allows a production release. Start that test with the first build.
 
+## Test builds
+
+CI signs every debug APK with one shared debug key, kept in the `RIPPL_DEBUG_KEYSTORE_BASE64` secret
+(a PKCS12 file, alias `androiddebugkey`, password `android`, as Android expects of a debug key), so a
+new test build installs over the previous one and keeps its presets. It is not the release key and
+protects nothing. If the secret is ever replaced, uninstall the app once before installing the next build.
+
 ## Each release
 
 1. Update `version` in `package.json`, `APP_VERSION` in `script.js`, and the `?v=` stamps in `index.html` (the build fails if they disagree). Add the release to `CHANGELOG.md`.
