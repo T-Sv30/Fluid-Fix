@@ -1,8 +1,9 @@
-// Draws the RIPPL Studio icon (a gradient droplet on a dark field) and writes every size the
-// web app and the Android app need. Pure Node: no image libraries. Run with `npm run icons`.
+// Cuts every icon the web app and the Android app need from one piece of artwork,
+// icons/app-icon-source.png (a glowing fluid swirl inside a rounded square, on black).
+// Pure Node: no image libraries. Run with `npm run icons` after replacing the artwork.
 
-import { deflateSync } from 'node:zlib';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,30 +48,61 @@ function png (size, rgba) {
     ]);
 }
 
-// ---------- Drawing ----------
+// ---------- PNG reader ----------
 
-const VIOLET = [139, 92, 246];
-const CYAN = [34, 211, 238];
-const PINK = [244, 114, 182];
-const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+// Reads an 8-bit RGB or RGBA PNG (not interlaced) into { width, height, channels, data }
+function readPng (file) {
+    const buf = readFileSync(file);
+    let pos = 8, width = 0, height = 0, channels = 0;
+    const idat = [];
+    while (pos < buf.length) {
+        const length = buf.readUInt32BE(pos);
+        const type = buf.toString('ascii', pos + 4, pos + 8);
+        const data = buf.subarray(pos + 8, pos + 8 + length);
+        if (type === 'IHDR') {
+            width = data.readUInt32BE(0);
+            height = data.readUInt32BE(4);
+            channels = data[9] === 2 ? 3 : data[9] === 6 ? 4 : 0;
+            if (data[8] !== 8 || !channels || data[12] !== 0) throw new Error(file + ': needs an 8-bit RGB or RGBA PNG that is not interlaced');
+        }
+        if (type === 'IDAT') idat.push(data);
+        pos += length + 12;
+    }
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = width * channels;
+    const out = Buffer.alloc(stride * height);
+    for (let y = 0; y < height; y++) {
+        const filter = raw[y * (stride + 1)];
+        const line = y * (stride + 1) + 1, row = y * stride;
+        for (let i = 0; i < stride; i++) {
+            const left = i >= channels ? out[row + i - channels] : 0;
+            const up = y > 0 ? out[row - stride + i] : 0;
+            const upLeft = y > 0 && i >= channels ? out[row - stride + i - channels] : 0;
+            let predict = 0;
+            if (filter === 1) predict = left;
+            else if (filter === 2) predict = up;
+            else if (filter === 3) predict = (left + up) >> 1;
+            else if (filter === 4) {
+                const p = left + up - upLeft;
+                const pa = Math.abs(p - left), pb = Math.abs(p - up), pc = Math.abs(p - upLeft);
+                predict = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+            }
+            out[row + i] = (raw[line + i] + predict) & 0xff;
+        }
+    }
+    return { width, height, channels, data: out };
+}
+
+// ---------- Cutting icons from the artwork ----------
+
+const art = readPng(join(ROOT, 'icons/app-icon-source.png'));
+
+// Where things are in the artwork, as fractions of its width
+const FRAME = 0.905;     // the glowing rounded square, edge to edge
+const INSIDE = 0.80;     // the fluid inside the frame, clear of its rim
+const FRAME_CORNER = 0.37;   // the frame's corner radius, relative to half its width
+
 const clamp01 = v => Math.min(1, Math.max(0, v));
-
-function gradient (t) {
-    t = clamp01(t);
-    return t < 0.55 ? mix(VIOLET, CYAN, t / 0.55) : mix(CYAN, PINK, (t - 0.55) / 0.45);
-}
-
-// Distance to a teardrop: a round body of radius r with its tip h above the centre (negative inside)
-function teardrop (x, y, r, h) {
-    x = Math.abs(x);
-    const tip = 0.02 * r;
-    const b = (r - tip) / h;
-    const a = Math.sqrt(1 - b * b);
-    const k = -x * b + y * a;
-    if (k < 0) return Math.hypot(x, y) - r;
-    if (k > a * h) return Math.hypot(x, y - h) - tip;
-    return x * a + y * b - r;
-}
 
 function roundedSquare (x, y, half, radius) {
     const dx = Math.abs(x) - half + radius;
@@ -78,60 +110,33 @@ function roundedSquare (x, y, half, radius) {
     return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - radius;
 }
 
-// One sample at (x, y) in -1..1, y pointing up. Returns straight-alpha [r, g, b, a].
-function sample (x, y, { shape, scale }) {
-    let color = [0, 0, 0];
-    let alpha = 0;
-
-    if (shape !== 'foreground') {
-        const glow = Math.exp(-((x * x) + (y + 0.1) * (y + 0.1)) * 1.6);
-        color = mix([8, 8, 16], [58, 28, 120], glow * 0.85);
-        alpha = shape === 'rounded' ? clamp01(0.5 - roundedSquare(x, y, 1, 0.44) * 200)
-              : shape === 'circle' ? clamp01(0.5 - (Math.hypot(x, y) - 1) * 200)
-              : 1;
-    }
-
-    const cy = -0.2 * scale;                      // body centre sits a little below the middle
-    const r = 0.5 * scale;
-    const d = teardrop(x, y - cy, r, 1.04 * scale);
-    const fill = gradient((x - (y - cy)) / (2.2 * scale) + 0.5);
-
-    // Soft halo around the drop
-    if (d > 0) {
-        const halo = Math.exp(-d / (0.16 * scale)) * 0.45;
-        color = mix(color, fill, halo);
-        if (shape === 'foreground') { color = fill; alpha = Math.max(alpha, halo); }
-    }
-
-    const inside = clamp01(0.5 - d * 160);
-    if (inside > 0) {
-        const lit = mix(fill, [255, 255, 255], clamp01(0.22 + (y - cy) / (3 * scale)) * 0.35);
-        color = mix(color, lit, inside);
-        alpha = Math.max(alpha, inside);
-
-        // The highlight: a short arc inside the lower left of the drop
-        const px = x, py = y - cy;
-        const ring = Math.abs(Math.hypot(px, py) - 0.3 * scale) - 0.045 * scale;
-        const angle = Math.atan2(py, px) * 180 / Math.PI;      // lower left is around -135°
-        const inArc = clamp01(1 - Math.abs(angle + 135) / 42);
-        const shine = clamp01(0.5 - ring * 160) * Math.min(1, inArc * 4) * inside;
-        color = mix(color, [255, 255, 255], shine * 0.9);
-    }
-    return [color[0], color[1], color[2], alpha];
-}
-
-function draw (size, options) {
+// One icon. `span` is how much of the artwork's width the icon shows, centred (more than 1 leaves
+// a black margin around the artwork). `shape` is the outline: 'rounded' follows the artwork's own
+// frame, 'circle' is a disc, 'full' is a plain square.
+function draw (size, { shape, span }) {
     const out = Buffer.alloc(size * size * 4);
-    const N = 4;   // 4×4 samples per pixel
+    const { width: W, height: H, channels: C, data } = art;
+    const N = Math.min(12, Math.max(3, Math.ceil(span * W / size)));     // samples per pixel, each way
     for (let py = 0; py < size; py++) {
         for (let px = 0; px < size; px++) {
             let r = 0, g = 0, b = 0, a = 0;
             for (let sy = 0; sy < N; sy++) {
                 for (let sx = 0; sx < N; sx++) {
                     const x = ((px + (sx + 0.5) / N) / size) * 2 - 1;
-                    const y = 1 - ((py + (sy + 0.5) / N) / size) * 2;
-                    const s = sample(x, y, options);
-                    r += s[0] * s[3]; g += s[1] * s[3]; b += s[2] * s[3]; a += s[3];
+                    const y = ((py + (sy + 0.5) / N) / size) * 2 - 1;
+                    const cover = shape === 'rounded' ? clamp01(0.5 - roundedSquare(x, y, 1, FRAME_CORNER) * size)
+                                : shape === 'circle' ? clamp01(0.5 - (Math.hypot(x, y) - 1) * size)
+                                : 1;
+                    if (cover === 0) continue;
+                    a += cover;
+                    const u = (0.5 + x * span / 2) * W - 0.5, v = (0.5 + y * span / 2) * H - 0.5;
+                    if (u < 0 || v < 0 || u > W - 1 || v > H - 1) continue;      // outside the artwork: black
+                    const iu = Math.min(W - 2, Math.floor(u)), iv = Math.min(H - 2, Math.floor(v));
+                    const fu = u - iu, fv = v - iv;
+                    const i = (iv * W + iu) * C, j = i + W * C;
+                    const tap = c => (data[i + c] * (1 - fu) + data[i + C + c] * fu) * (1 - fv)
+                                   + (data[j + c] * (1 - fu) + data[j + C + c] * fu) * fv;
+                    r += tap(0) * cover; g += tap(1) * cover; b += tap(2) * cover;
                 }
             }
             const i = (py * size + px) * 4;
@@ -154,10 +159,10 @@ function write (path, size, options) {
 }
 
 // Web app
-write('icons/icon-192.png', 192, { shape: 'rounded', scale: 0.62 });
-write('icons/icon-512.png', 512, { shape: 'rounded', scale: 0.62 });
-write('icons/maskable-512.png', 512, { shape: 'full', scale: 0.46 });
-write('icons/store-icon-512.png', 512, { shape: 'full', scale: 0.62 });   // Google Play listing icon
+write('icons/icon-192.png', 192, { shape: 'rounded', span: FRAME });
+write('icons/icon-512.png', 512, { shape: 'rounded', span: FRAME });
+write('icons/maskable-512.png', 512, { shape: 'full', span: INSIDE });      // the device cuts its own shape from this
+write('icons/store-icon-512.png', 512, { shape: 'full', span: 1 });         // Google Play listing icon
 
 // Android app (skipped until the android project exists)
 const res = 'android/app/src/main/res';
@@ -165,8 +170,9 @@ if (existsSync(join(ROOT, res))) {
     const densities = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
     Object.keys(densities).forEach(d => {
         const k = densities[d];
-        write(`${res}/mipmap-${d}/ic_launcher.png`, 48 * k, { shape: 'rounded', scale: 0.62 });
-        write(`${res}/mipmap-${d}/ic_launcher_round.png`, 48 * k, { shape: 'circle', scale: 0.56 });
-        write(`${res}/mipmap-${d}/ic_launcher_foreground.png`, 108 * k, { shape: 'foreground', scale: 0.4 });
+        write(`${res}/mipmap-${d}/ic_launcher.png`, 48 * k, { shape: 'rounded', span: FRAME });
+        write(`${res}/mipmap-${d}/ic_launcher_round.png`, 48 * k, { shape: 'circle', span: INSIDE });
+        // The launcher shows the middle two thirds of this layer, so the fluid fills that and the frame falls outside it
+        write(`${res}/mipmap-${d}/ic_launcher_foreground.png`, 108 * k, { shape: 'full', span: INSIDE * 108 / 76 });
     });
 }

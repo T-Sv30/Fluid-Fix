@@ -13,7 +13,7 @@ Interactive WebGL fluid simulation, shipped as an Android app (Capacitor) and a 
 ## Commands
 - `npm run check`: lint + tests + build. Run before every commit.
 - `npm start`: local server on :8080.
-- `npm run icons`: regenerate all icons (drawn in code by `scripts/make-icons.mjs`).
+- `npm run icons`: regenerate all icons (`scripts/make-icons.mjs` cuts every size from the artwork in `icons/app-icon-source.png`).
 - Android can't be built on the Termux phone (no JDK/SDK); CI builds the APK on every PR.
 - On Termux, run CLIs through node (`node node_modules/@capacitor/cli/bin/capacitor ...`); the `.bin` shims fail there.
 
