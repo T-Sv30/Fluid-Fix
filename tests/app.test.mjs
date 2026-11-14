@@ -14,6 +14,8 @@ function openTab (label, section) {
     if (section) app.click(app.$$('.rs-subtabs .rs-chip').find(c => c.textContent === section));
 }
 
+const visibleRows = () => app.$$('.rs-body .rs-row').filter(r => !r.hidden).map(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent);
+
 function row (label) {
     const el = app.$$('.rs-body .rs-row').find(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent === label);
     assert.ok(el, 'control "' + label + '" exists');
@@ -148,7 +150,6 @@ describe('controls', () => {
 });
 
 describe('finding your way', () => {
-    const visibleRows = () => app.$$('.rs-body .rs-row').filter(r => !r.hidden).map(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent);
 
     test('every setting, section and button has a short description', () => {
         start({ storage: WELCOMED });
@@ -438,6 +439,26 @@ describe('particles', () => {
     test('the Speed help no longer says particles follow the fluid', () => {
         start({ storage: WELCOMED });
         assert.doesNotMatch(app.run('HELP.PARTICLE_SPEED'), /follow/);
+    });
+
+    test('how fast particles slow down and how hard they are pushed outward are settings', async () => {
+        start({ storage: WELCOMED });
+        // The middle of each slider is the feel the app shipped with
+        assert.equal(app.run('particleDrag()'), 1.3);
+        assert.equal(app.run('particlePush()'), 0.45);
+        app.run('config.PARTICLE_DRAG = 0; config.PARTICLE_PUSH = 0');
+        assert.equal(app.run('particleDrag()'), 0, 'at 0% particles never slow down');
+        assert.equal(app.run('particlePush()'), 0, 'at 0% nothing pushes them outward');
+        app.run('config.PARTICLE_DRAG = 100; config.PARTICLE_PUSH = 100');
+        assert.ok(app.run('particleDrag()') > 1.3);
+        assert.ok(app.run('particlePush()') > 0.45);
+
+        openTab('Layers', 'Particles');
+        app.click(row('Particles'));
+        await app.settle();
+        assert.ok(visibleRows().includes('Slow down'));
+        assert.ok(visibleRows().includes('Outward push'));
+        assert.deepEqual(app.errors, []);
     });
 
     test('the Spread help says particles come from the fluid', () => {

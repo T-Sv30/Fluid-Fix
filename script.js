@@ -154,6 +154,8 @@ let config = {
     PARTICLE_DENSITY: 100,
     PARTICLE_GLOW: 30,
     PARTICLE_SPREAD: 100,
+    PARTICLE_DRAG: 50,
+    PARTICLE_PUSH: 50,
     PARTICLE_TURBULENCE: 0,
     PARTICLE_FADE: 30,
     PARTICLE_ATTRACTION: 0,
@@ -1050,8 +1052,15 @@ const PARTICLE_STYLES = ['Points', 'Lines', 'Trails', 'Circles', 'Glow', 'Sparks
 const PARTICLE_COLOR_MODES = ['Fluid Color', 'Single Color', 'Random', 'Velocity-Based', 'Rainbow', 'Gradient', 'Temperature-Based'];
 
 // Particles fly like firework sparks: launched with the fluid, pushed out from its center, slowing down
-const PARTICLE_DRAG = 1.3;    // per second; speed halves about every half second
-const PARTICLE_PUSH = 0.45;   // outward acceleration at the edge of the fluid, screens per second squared
+// How quickly a particle loses speed, per second: 0% = never, 50% = halves about every half second
+function particleDrag () {
+    return 1.3 * Math.pow(config.PARTICLE_DRAG / 50, 2);
+}
+
+// Outward acceleration at the edge of the fluid, in screens per second squared
+function particlePush () {
+    return 0.45 * config.PARTICLE_PUSH / 50;
+}
 
 const particles = {
     supported: null,     // decided on first use
@@ -1728,8 +1737,8 @@ function updateParticles (dt) {
     gl.uniform1f(m.uniforms.dt, step);
     gl.uniform1f(m.uniforms.time, particles.time);
     gl.uniform1f(m.uniforms.aspectRatio, canvas.width / canvas.height);
-    gl.uniform1f(m.uniforms.drag, PARTICLE_DRAG);
-    gl.uniform1f(m.uniforms.push, PARTICLE_PUSH);
+    gl.uniform1f(m.uniforms.drag, particleDrag());
+    gl.uniform1f(m.uniforms.push, particlePush());
     blit(particles.momentum.write);
     particles.momentum.swap();
 }
@@ -3287,6 +3296,8 @@ const HELP = {
     PARTICLE_DENSITY: 'The share of the particles that is shown.',
     PARTICLE_SPREAD: 'Where particles are born: anywhere there is fluid at the top, only in the fluid around your finger lower down.',
     PARTICLE_FADE: 'How quickly each particle disappears.',
+    PARTICLE_DRAG: 'How quickly particles lose their speed after they set off. At 0% they keep going.',
+    PARTICLE_PUSH: 'How hard particles are pushed outward, away from the middle of the fluid.',
     PARTICLE_TURBULENCE: 'Adds jitter to particle paths.',
     PARTICLE_ATTRACTION: 'Makes particles drift toward each other.',
     PARTICLE_COLLISION: 'Crowded particles push each other apart.',
@@ -3703,6 +3714,8 @@ function buildTabs () {
             ctl.toggle('PARTICLE_TRAILS', 'Trails'),
             ctl.heading('Movement'),
             ctl.slider('PARTICLE_SPEED', 'Speed'),
+            ctl.slider('PARTICLE_DRAG', 'Slow down'),
+            ctl.slider('PARTICLE_PUSH', 'Outward push'),
             ctl.slider('PARTICLE_TURBULENCE', 'Jitter'),
             ctl.slider('PARTICLE_ATTRACTION', 'Attraction'),
             ctl.toggle('PARTICLE_COLLISION', 'Collision'),
