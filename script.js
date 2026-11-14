@@ -69,6 +69,12 @@ let config = {
     TRANSITION_TIME: 10,
     BACKGROUND: 'Black',
     RAINBOW: false,
+    // Color over the fluid's life: it starts in one color and shifts through the others as it ages
+    AGE_COLORS: false,
+    AGE_COLOR_START: { r: 255, g: 214, b: 64 },
+    AGE_COLOR_MIDDLE: { r: 255, g: 56, b: 96 },
+    AGE_COLOR_END: { r: 96, g: 64, b: 255 },
+    AGE_COLOR_TIME: 50,
     RAINBOW_SPEED: 0.12,
     BLACKLIGHT: false,
     TRAILS: false,
@@ -315,8 +321,28 @@ function neonize (c) {
     return { r: (c.r - mn) * k * 1.6, g: (c.g - mn) * k * 1.6, b: (c.b - mn) * k * 1.6 };
 }
 
+// The hue of a color chosen for the fluid's life, at full brightness: how bright the fluid is
+// comes from how much of it there is. Black has no hue and would erase the fluid, so it is white.
+function ageColorTint (c) {
+    const m = Math.max(c.r, c.g, c.b);
+    if (m < 1) return { r: 1, g: 1, b: 1 };
+    return { r: c.r / m, g: c.g / m, b: c.b / m };
+}
+
+// Seconds for fluid to go from its starting color to its final one: 0% = 1 s, 100% = 30 s
+function ageColorSeconds () {
+    const p = config.AGE_COLOR_TIME / 100;
+    return 1 + 29 * p * p;
+}
+
 function finishColor (c) {
     if (config.BLACKLIGHT) c = neonize(c);
+    if (config.AGE_COLORS) {
+        // New fluid goes in already wearing its starting color
+        const m = Math.max(c.r, c.g, c.b);
+        const t = ageColorTint(config.AGE_COLOR_START);
+        c = { r: t.r * m, g: t.g * m, b: t.b * m };
+    }
     return { r: c.r * 0.15, g: c.g * 0.15, b: c.b * 0.15 };
 }
 
@@ -3236,6 +3262,11 @@ const HELP = {
     AUTO_TRANSITION: 'Fades smoothly to the next palette every few seconds.',
     TRANSITION_TIME: 'How long each palette stays before the next one fades in.',
     RAINBOW: 'Colors sweep continuously around the color wheel.',
+    AGE_COLORS: 'The fluid starts in one color and shifts through two more as it gets older. These three colors take the place of the palette.',
+    AGE_COLOR_START: 'The color of fluid the moment it appears. Only the hue counts; brightness comes from how much fluid there is.',
+    AGE_COLOR_MIDDLE: 'The color the fluid has halfway through the change.',
+    AGE_COLOR_END: 'The color the fluid ends up, and keeps. Fluid that fades away sooner never gets this far.',
+    AGE_COLOR_TIME: 'How long fluid takes to go from its starting color to its final one.',
     RAINBOW_SPD: 'How quickly the rainbow moves through its colors.',
     BACKGROUND: 'What sits behind the fluid.',
     BACK_COLOR: 'Your own background color. Choosing one switches the background to Custom.',
@@ -3598,6 +3629,14 @@ function buildTabs () {
         ]),
         ctl.toggle('RAINBOW', 'Rainbow'),
         ...shownIf(on('RAINBOW'), [ctl.pct('RAINBOW_SPD', 'Rainbow speed')]),
+        ctl.heading('Over its life'),
+        ctl.toggle('AGE_COLORS', 'Change color with age'),
+        ...shownIf(on('AGE_COLORS'), [
+            ctl.color('AGE_COLOR_START', 'Starting color'),
+            ctl.color('AGE_COLOR_MIDDLE', 'Middle color'),
+            ctl.color('AGE_COLOR_END', 'Final color'),
+            ctl.slider('AGE_COLOR_TIME', 'Time to change', { format: () => ageColorSeconds().toFixed(ageColorSeconds() < 10 ? 1 : 0) + ' s' }),
+        ]),
     ];
 
     const background = [
@@ -4823,8 +4862,9 @@ const splatShader = compileShader(gl.FRAGMENT_SHADER, `
             p.x *= aspectRatio;
             sum += exp(-dot(p, p) / points[i].z) * colors[i];
         }
-        vec3 base = texture2D(uTarget, vUv).xyz;
-        gl_FragColor = vec4(base + sum, 1.0);
+        // The dye's fourth channel carries its age (see the advection shader); new color adds none
+        vec4 base = texture2D(uTarget, vUv);
+        gl_FragColor = vec4(base.xyz + sum, base.w);
     }
 `, ['BATCH ' + SPLAT_BATCH]);
 
@@ -4839,6 +4879,12 @@ const advectionShader = compileShader(gl.FRAGMENT_SHADER, `
     uniform vec2 dyeTexelSize;
     uniform float dt;
     uniform float dissipation;
+    uniform float ageStep;      // seconds the dye ages this step; 0 when advecting velocity
+    uniform float ageColors;    // 1 = recolor the dye by its age
+    uniform float ageSpan;      // seconds from the starting color to the final one
+    uniform vec3 ageStart;
+    uniform vec3 ageMiddle;
+    uniform vec3 ageEnd;
 
     vec4 bilerp (sampler2D sam, vec2 uv, vec2 tsize) {
         vec2 st = uv / tsize - 0.5;
@@ -4862,6 +4908,15 @@ const advectionShader = compileShader(gl.FRAGMENT_SHADER, `
         vec2 coord = vUv - dt * texture2D(uVelocity, vUv).xy * texelSize;
         vec4 result = texture2D(uSource, coord);
     #endif
+        // The dye's fourth channel holds age x amount, so where old and new fluid mix the age
+        // comes out as their weighted average. Age is capped so it can't overflow the texture.
+        float amount = max(result.r, max(result.g, result.b));
+        result.a = min(result.a + amount * ageStep, amount * 600.0);
+        if (ageColors > 0.5 && amount > 0.0001) {
+            float t = clamp(result.a / amount / ageSpan, 0.0, 1.0);
+            vec3 tint = t < 0.5 ? mix(ageStart, ageMiddle, t * 2.0) : mix(ageMiddle, ageEnd, t * 2.0 - 1.0);
+            result.rgb = tint * amount;
+        }
         float decay = 1.0 + dissipation * dt;
         gl_FragColor = result / decay;
     }`,
@@ -5872,6 +5927,8 @@ function step (dt) {
     const flowScale = pctSpeedTo(config.FLOW_STRENGTH);
     gl.uniform1f(advectionProgram.uniforms.dt, dt * flowScale);
     gl.uniform1f(advectionProgram.uniforms.dissipation, config.VELOCITY_DISSIPATION / Math.max(flowScale, 0.05));
+    gl.uniform1f(advectionProgram.uniforms.ageStep, 0);
+    gl.uniform1f(advectionProgram.uniforms.ageColors, 0);
     blit(velocity.write);
     velocity.swap();
 
@@ -5880,6 +5937,14 @@ function step (dt) {
     gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
     gl.uniform1i(advectionProgram.uniforms.uSource, dye.read.attach(1));
     gl.uniform1f(advectionProgram.uniforms.dissipation, (config.TRAILS ? config.DENSITY_DISSIPATION * 0.12 : config.DENSITY_DISSIPATION) / Math.max(flowScale, 0.05));
+    // The dye ages as it flows, and can be recolored by that age
+    gl.uniform1f(advectionProgram.uniforms.ageStep, dt);
+    gl.uniform1f(advectionProgram.uniforms.ageColors, config.AGE_COLORS ? 1 : 0);
+    gl.uniform1f(advectionProgram.uniforms.ageSpan, ageColorSeconds());
+    [['ageStart', config.AGE_COLOR_START], ['ageMiddle', config.AGE_COLOR_MIDDLE], ['ageEnd', config.AGE_COLOR_END]].forEach(([name, color]) => {
+        const t = ageColorTint(color);
+        gl.uniform3f(advectionProgram.uniforms[name], t.r, t.g, t.b);
+    });
     blit(dye.write);
     dye.swap();
 

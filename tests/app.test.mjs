@@ -467,6 +467,55 @@ describe('device settings', () => {
     });
 });
 
+describe('fluid color over its life', () => {
+    test('the three colors and the time appear only while the feature is on', async () => {
+        start({ storage: WELCOMED });
+        openTab('Color', 'Palette');
+        assert.ok(visibleRows().includes('Change color with age'));
+        assert.ok(!visibleRows().includes('Starting color'));
+        app.click(row('Change color with age'));
+        await app.settle();
+        ['Starting color', 'Middle color', 'Final color', 'Time to change'].forEach(label =>
+            assert.ok(visibleRows().includes(label), label));
+        app.frames(3);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('a chosen color sets the hue; brightness comes from the fluid', () => {
+        start({ storage: WELCOMED });
+        const tint = c => JSON.parse(app.run('JSON.stringify(ageColorTint(' + JSON.stringify(c) + '))'));
+        assert.deepEqual(tint({ r: 255, g: 0, b: 0 }), { r: 1, g: 0, b: 0 });
+        assert.deepEqual(tint({ r: 100, g: 50, b: 0 }), { r: 1, g: 0.5, b: 0 }, 'a dark shade is as bright as a light one');
+        assert.deepEqual(tint({ r: 0, g: 0, b: 0 }), { r: 1, g: 1, b: 1 }, 'black would erase the fluid, so it counts as white');
+    });
+
+    test('the time slider runs from 1 second to 30', () => {
+        start({ storage: WELCOMED });
+        const seconds = pct => app.run('config.AGE_COLOR_TIME = ' + pct + '; ageColorSeconds()');
+        assert.equal(seconds(0), 1);
+        assert.equal(seconds(100), 30);
+        assert.ok(seconds(50) > 1 && seconds(50) < 30);
+    });
+
+    test('new fluid starts in the starting color', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLORS = true; config.AGE_COLOR_START = { r: 0, g: 0, b: 255 }');
+        const c = JSON.parse(app.run('JSON.stringify(generateColor())'));
+        assert.equal(c.r, 0);
+        assert.equal(c.g, 0);
+        assert.ok(c.b > 0);
+    });
+
+    test('the colors are saved with a preset', () => {
+        start({ storage: WELCOMED });
+        app.run('config.AGE_COLORS = true; config.AGE_COLOR_END = { r: 1, g: 2, b: 3 }; config.AGE_COLOR_TIME = 80; presetSave()');
+        const saved = JSON.parse(app.run('JSON.stringify(presetState.user[0].values)'));
+        assert.equal(saved.AGE_COLORS, true);
+        assert.deepEqual(saved.AGE_COLOR_END, { r: 1, g: 2, b: 3 });
+        assert.equal(saved.AGE_COLOR_TIME, 80);
+    });
+});
+
 describe('particles', () => {
     test('start out waiting for fluid instead of scattered over the screen', () => {
         start({ storage: WELCOMED });
