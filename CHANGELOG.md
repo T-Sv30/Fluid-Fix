@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.1
 
 ### Fixes
 - A device whose graphics can't run the simulation now gets a message explaining so, instead of
