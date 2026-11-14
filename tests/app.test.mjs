@@ -491,6 +491,51 @@ describe('staying up on any device', () => {
         assert.equal(app.run('perf.appliedDye'), 1536);
     });
 
+    test('a GPU that can’t draw into floating-point textures gets a message, not a blank screen', () => {
+        start({ storage: WELCOMED, gl: { incompleteFramebuffers: true } });
+        assert.match(app.$('.rs-fatal').textContent, /graphics can’t draw into the floating-point textures/);
+        assert.equal(app.errors.length, 1, 'the app stops there');
+    });
+
+    test('a GPU that can’t build the simulation’s shaders gets a message, not a blank screen', () => {
+        start({ storage: WELCOMED, gl: { linkFails: true } });
+        assert.match(app.$('.rs-fatal').textContent, /graphics couldn’t prepare the simulation/);
+        assert.equal(app.errors.length, 1, 'the app stops there');
+    });
+
+    test('slow frames don’t pile extra solver passes on a struggling device', () => {
+        start({ storage: WELCOMED });
+        app.run('config.FPS_LIMIT = "Unlimited"; config.BATTERY_SAVER = false;');
+        const substeps = (frameMs, simDt) => app.run(`perf.emaInterval = ${frameMs}; simSubsteps(${simDt})`);
+        assert.equal(substeps(16, 0.016), 1);
+        assert.equal(substeps(16, 0.2), 6, 'a fast device takes as many passes as accuracy asks for');
+        assert.equal(substeps(60, 0.2), 2, 'a struggling one takes at most two');
+        app.run('config.FPS_LIMIT = "15 FPS"');
+        assert.equal(substeps(66, 0.2), 6, 'a frame rate limit is not struggling');
+    });
+
+    test('the frame rate limit holds its average on a faster screen', () => {
+        start({ storage: WELCOMED });
+        app.run('config.FPS_LIMIT = "30 FPS"; config.BATTERY_SAVER = false; perf.lastFrameAt = 0;');
+        // One second of a 120 Hz screen
+        const drawn = app.run('(() => { let n = 0; for (let i = 1; i <= 120; i++) if (frameAllowed(i * 1000 / 120)) n++; return n; })()');
+        assert.ok(drawn >= 29 && drawn <= 31, 'drew ' + drawn + ' frames');
+    });
+
+    test('screen filter buffers are freed when the last filter is switched off', () => {
+        start({ storage: WELCOMED });
+        app.frames(2);
+        assert.equal(app.run('frameFBO'), null, 'nothing is held while no filter is on');
+        app.run('config.INVERT = true');
+        app.frames(2);
+        assert.notEqual(app.run('frameFBO'), null);
+        app.run('config.INVERT = false');
+        app.frames(2);
+        assert.equal(app.run('frameFBO'), null);
+        assert.equal(app.run('historyFBO'), null);
+        assert.deepEqual(app.errors, []);
+    });
+
     test('adaptive quality waits longer to raise again after a raise that didn’t hold', () => {
         start({ storage: WELCOMED });
         const feed = (frameMs, seconds) => app.run(`perf.emaInterval = ${frameMs}; updateAdaptive(${seconds}); perf.adaptLevel`);
