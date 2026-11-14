@@ -4,4 +4,5 @@
     <string name="title_activity_main">RIPPL Studio</string>
     <string name="package_name">io.github.tsv30.ripplstudio</string>
     <string name="custom_url_scheme">io.github.tsv30.ripplstudio</string>
+    <string name="wallpaper_description">Your RIPPL Studio fluid, moving behind your home screen. Touch it to stir.</string>
 </resources>

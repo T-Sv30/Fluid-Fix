@@ -1429,3 +1429,12 @@ body.hide-ui .rs-sheet {
         animation: none !important;
     }
 }
+
+/* ---------- Wallpaper page ----------
+   The app opened as a wallpaper (?wallpaper=1) shows only the fluid. */
+
+body.wallpaper-mode .rs-ui,
+body.wallpaper-mode .toast,
+body.wallpaper-mode .modal {
+    display: none !important;
+}

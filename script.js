@@ -2324,8 +2324,18 @@ function updatePerformance (dt) {
 
 const memoryStore = {};
 
+// The wallpaper page is this same app opened with ?wallpaper=1: no controls, one fixed look.
+// On Android it shares the app's storage, so it reads what the app saved but writes only to its
+// own session storage: a running wallpaper must never change the app's presets or settings.
+const WALLPAPER_MODE = /[?&]wallpaper=1(&|$)/.test(window.location.search);
+const WALLPAPER_LOOK_KEY = 'rippl.wallpaperLook';
+
 function storeGet (key) {
     try {
+        if (WALLPAPER_MODE) {
+            const own = window.sessionStorage.getItem(key);
+            if (own != null) return own;
+        }
         const v = window.localStorage.getItem(key);
         return v != null ? v : (key in memoryStore ? memoryStore[key] : null);
     } catch (e) {
@@ -2335,7 +2345,7 @@ function storeGet (key) {
 
 function storeSet (key, value) {
     memoryStore[key] = value;
-    try { window.localStorage.setItem(key, value); } catch (e) { /* memory only */ }
+    try { (WALLPAPER_MODE ? window.sessionStorage : window.localStorage).setItem(key, value); } catch (e) { /* memory only */ }
 }
 
 // ---------- Settings snapshots ----------
@@ -2807,17 +2817,107 @@ function toggleFullscreen () {
     }
 }
 
-function showWallpaperInfo () {
+// ---------- Live wallpaper ----------
+
+// The settings that differ from a fresh start: all a wallpaper needs to rebuild the look
+function currentLook () {
+    const now = snapshotValues();
+    const out = {};
+    Object.keys(now).forEach(k => {
+        if (!DEFAULT_VALUES || JSON.stringify(now[k]) !== JSON.stringify(DEFAULT_VALUES[k])) out[k] = now[k];
+    });
+    return out;
+}
+
+// A look as text that is safe inside a link: base64url of its JSON, as UTF-8 so any letters survive
+function encodeLook (values) {
+    const bytes = encodeURIComponent(JSON.stringify(values))
+        .replace(/%([0-9A-F]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+    return window.btoa(bytes).split('+').join('-').split('/').join('_').split('=').join('');
+}
+
+function decodeLook (text) {
+    const bytes = window.atob(text.split('-').join('+').split('_').join('/'));
+    const escaped = Array.from(bytes, c => '%' + ('0' + c.charCodeAt(0).toString(16)).slice(-2)).join('');
+    return JSON.parse(decodeURIComponent(escaped));
+}
+
+// The address of the wallpaper page showing the look on screen now
+function wallpaperLink () {
+    return window.location.origin + window.location.pathname + '?wallpaper=1#look=' + encodeLook(currentLook());
+}
+
+function useAsWallpaper () {
+    if (platform.isNative) {
+        storeSet(WALLPAPER_LOOK_KEY, JSON.stringify(currentLook()));
+        platform.setLiveWallpaper().then(
+            () => showToast('Choose “Set wallpaper” to finish'),
+            () => openModal({
+                title: 'Live wallpaper didn’t open',
+                text: 'This phone didn’t open its live wallpaper screen. Look for RIPPL Studio under ' +
+                      'Wallpaper in the phone’s settings; it will show the look you just chose.',
+            })
+        );
+        return;
+    }
+    const link = wallpaperLink();
     openModal({
-        title: 'Use as a wallpaper',
-        text: 'A true Android live wallpaper is planned for a later release. Until then, two options: ' +
-              'save an image and set it as your wallpaper from your gallery, or for a living display turn on ' +
-              '“Gentle automatic splashes” and “Keep the screen on”, then hide the controls.',
+        title: 'Live desktop background',
+        text: 'A web page can’t change your desktop by itself. Copy this link into a wallpaper app that ' +
+              'shows web pages, such as Lively Wallpaper on Windows or Plash on a Mac, and this look ' +
+              'becomes your moving background.',
+        input: link,
+        readOnly: true,
+        label: 'Wallpaper link',
         buttons: [
-            { label: 'Hide the controls', action: () => window.RipplUI.setHidden(true) },
-            { label: 'OK', primary: true },
+            { label: 'Close' },
+            { label: 'Preview', action: () => window.open(link, '_blank', 'noopener') },
+            { label: 'Copy link', primary: true, action: () => copyText(link) },
         ],
     });
+}
+
+// On the wallpaper page: which look is showing, and whether the wallpaper is on screen
+const wallpaperPage = { applied: null, hidden: false, stopped: false };
+
+// The look in the link if there is one (desktop), otherwise the one the app saved (Android)
+function wallpaperLookText () {
+    const inLink = /[#&]look=([^&]*)/.exec(window.location.hash);
+    if (inLink) {
+        try { return JSON.stringify(decodeLook(inLink[1])); } catch (e) { return '{}'; }
+    }
+    return storeGet(WALLPAPER_LOOK_KEY) || '{}';
+}
+
+function applyWallpaperLook () {
+    const text = wallpaperLookText();
+    if (text === wallpaperPage.applied) return;
+    wallpaperPage.applied = text;
+    let values = {};
+    try { values = JSON.parse(text); } catch (e) { /* damaged: show the default look */ }
+    applyValues(values, true);
+    // Nobody is there to stir it, so it has to keep itself moving
+    config.PAUSED = false;
+    config.SPLASHES = true;
+}
+
+if (WALLPAPER_MODE) {
+    document.body.classList.add('wallpaper-mode');
+    window.addEventListener('storage', e => { if (e.key === WALLPAPER_LOOK_KEY) applyWallpaperLook(); });
+    // Called by the Android wallpaper service as the home screen comes and goes
+    window.RipplWallpaper = {
+        setVisible (visible) {
+            wallpaperPage.hidden = !visible;
+            if (!visible) return;
+            applyWallpaperLook();
+            if (wallpaperPage.stopped) {
+                wallpaperPage.stopped = false;
+                lastUpdateTime = null;
+                perf.prevDrawn = null;
+                requestAnimationFrame(update);
+            }
+        },
+    };
 }
 
 const wallpaper = { timer: 2 };
@@ -3238,6 +3338,12 @@ function loadDeviceSettings () {
         });
         if (typeof stored.HAPTICS === 'boolean') deviceSettings.HAPTICS = stored.HAPTICS;
         if (typeof stored.KEEP_AWAKE === 'boolean') deviceSettings.KEEP_AWAKE = stored.KEEP_AWAKE;
+    }
+    if (WALLPAPER_MODE) {
+        // A wallpaper runs all day behind everything else, so it stays light on the battery
+        Object.assign(config, { FPS_LIMIT: '30 FPS', ADAPTIVE_QUALITY: true });
+        config.RENDER_SCALE = Math.min(config.RENDER_SCALE, 70);
+        deviceSettings.KEEP_AWAKE = false;
     }
     platform.setHaptics(deviceSettings.HAPTICS);
     if (deviceSettings.KEEP_AWAKE) platform.keepAwake(true);
@@ -3902,7 +4008,9 @@ function buildTabs () {
         ctl.action('Hide the controls', () => window.RipplUI.setHidden(true),
             'Shows only the fluid. Tap the small arrow at the bottom to bring the controls back.', { icon: 'hide' }),
         ...(platform.isNative ? [] : [ctl.action('Fullscreen', toggleFullscreen, 'Fills the whole screen, hiding the browser.', { icon: 'expand' })]),
-        ctl.action('Use as a wallpaper', showWallpaperInfo, 'How to use RIPPL Studio as a wallpaper or a living display.', { icon: 'phone' }),
+        platform.isNative
+            ? ctl.action('Set as live wallpaper', useAsWallpaper, 'Puts the look on screen now behind your home screen, as a moving wallpaper you can touch.', { icon: 'phone' })
+            : ctl.action('Use as a live desktop background', useAsWallpaper, 'Makes a link to this look that a desktop wallpaper app can show as a moving background.', { icon: 'phone' }),
     ];
 
     const app = [
@@ -5821,10 +5929,15 @@ canvas.addEventListener('webglcontextlost', e => {
 canvas.addEventListener('webglcontextrestored', () => { if (!graphicsGaveUp) reloadApp(); });
 
 initPresets();
+if (WALLPAPER_MODE) applyWallpaperLook();
 update();
 
 function update (timestamp) {
     if (contextLost) return;   // resumes through a reload once the context is restored
+    if (wallpaperPage.hidden) {
+        wallpaperPage.stopped = true;   // nothing is drawn while the wallpaper is out of sight
+        return;
+    }
     // One clock for everything: the browser's frame timestamp
     const now = typeof timestamp === 'number' ? timestamp : performance.now();
     if (!frameAllowed(now)) {

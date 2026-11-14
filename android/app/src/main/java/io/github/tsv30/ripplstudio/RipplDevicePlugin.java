@@ -1,7 +1,10 @@
 package io.github.tsv30.ripplstudio;
 
+import android.app.WallpaperManager;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -96,5 +99,30 @@ public class RipplDevicePlugin extends Plugin {
             }
             call.resolve();
         });
+    }
+
+    /**
+     * Opens Android's screen for setting RIPPL Studio as the live wallpaper, where the user
+     * previews it and confirms. Falls back to the list of all live wallpapers on devices
+     * that don't offer the direct screen.
+     */
+    @PluginMethod
+    public void setLiveWallpaper(PluginCall call) {
+        Intent direct = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
+        direct.putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                new ComponentName(getContext(), RipplWallpaperService.class));
+        try {
+            getActivity().startActivity(direct);
+            call.resolve();
+            return;
+        } catch (RuntimeException e) {
+            // No such screen on this device; try the general list next
+        }
+        try {
+            getActivity().startActivity(new Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER));
+            call.resolve();
+        } catch (RuntimeException e) {
+            call.unavailable("This device has no live wallpaper screen");
+        }
     }
 }

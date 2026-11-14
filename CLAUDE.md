@@ -7,7 +7,8 @@ Interactive WebGL fluid simulation, shipped as an Android app (Capacitor) and a 
 - `script.js`: engine (simulation, shaders, presets). Settings are described as data in `buildTabs()`.
 - `ui.js` + `ui.css`: interface, drawn from that data. Knows nothing about the simulation.
 - `native.js`: `window.RipplNative`, the only place that talks to Capacitor (through the injected bridge: `Capacitor.nativePromise(plugin, method, options)`), with web fallbacks.
-- `android/`: Capacitor shell plus `RipplDevicePlugin.java` (save to gallery, keep screen on).
+- `android/`: Capacitor shell plus `RipplDevicePlugin.java` (save to gallery, keep screen on, open the wallpaper screen) and `RipplWallpaperService.java` (the live wallpaper: its own WebView showing `index.html?wallpaper=1`).
+- Wallpaper mode (`WALLPAPER_MODE` in `script.js`, `?wallpaper=1`): no interface, one fixed look from the link's `#look=` or the `rippl.wallpaperLook` key, and it never writes to `localStorage`.
 - `scripts/build.mjs` copies the web files to `dist/` for the Android shell.
 
 ## Commands
