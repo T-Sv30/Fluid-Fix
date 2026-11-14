@@ -407,10 +407,98 @@ describe('device settings', () => {
 
         const bad = JSON.stringify({ FPS_LIMIT: '9000 FPS', RENDER_SCALE: 'max', DYE_RESOLUTION: 123456, HAPTICS: 'no' });
         start({ storage: { ...WELCOMED, 'rippl.device': bad } });
-        assert.equal(app.run('config.FPS_LIMIT'), 'Unlimited');
-        assert.equal(app.run('config.RENDER_SCALE'), 100);
+        assert.equal(app.run('config.FPS_LIMIT'), '60 FPS', 'the phone default');
+        assert.equal(app.run('config.RENDER_SCALE'), 85, 'the phone default');
         assert.equal(app.run('config.DYE_RESOLUTION'), 512, 'the phone default');
         assert.equal(app.run('deviceSettings.HAPTICS'), true);
+    });
+});
+
+describe('staying up on any device', () => {
+    const loseGraphics = () => app.$('canvas').dispatchEvent(new app.window.Event('webglcontextlost', { cancelable: true }));
+    const restoreGraphics = () => app.$('canvas').dispatchEvent(new app.window.Event('webglcontextrestored'));
+    // Reloading can't happen inside the test page, so count the requests instead
+    const countReloads = () => app.run('var reloads = 0; reloadApp = () => { reloads++; };');
+    const resets = (...secondsAgo) => JSON.stringify(secondsAgo.map(s => Date.now() - s * 1000));
+    const HEAVY = JSON.stringify({ DYE_RESOLUTION: 2048, EFFECT_QUALITY: 'Ultra', RENDER_SCALE: 100, PARTICLE_LIMIT: 'Maximum', ADAPTIVE_QUALITY: false });
+
+    test('a new phone starts in Balanced mode rather than flat out', () => {
+        start({ storage: WELCOMED });
+        assert.equal(app.run('config.PERFORMANCE_MODE'), 'Balanced');
+        assert.equal(app.run('config.FPS_LIMIT'), '60 FPS');
+        assert.equal(app.run('config.RENDER_SCALE'), 85);
+        assert.equal(app.run('config.ADAPTIVE_QUALITY'), true);
+    });
+
+    test('one graphics reset keeps the look and the device settings, and reloads', () => {
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY } });
+        countReloads();
+        app.run('config.CURL = 42');
+        loseGraphics();
+        restoreGraphics();
+        assert.equal(app.run('reloads'), 1);
+        assert.equal(JSON.parse(app.window.localStorage.getItem('fluidfix.recover')).CURL, 42);
+        const stored = { ...WELCOMED, 'rippl.device': HEAVY, 'rippl.gfxResets': app.window.localStorage.getItem('rippl.gfxResets') };
+        app.close();
+
+        start({ storage: stored });
+        assert.equal(app.run('config.DYE_RESOLUTION'), 2048, 'a single reset is not blamed on the settings');
+        assert.equal(app.run('config.EFFECT_QUALITY'), 'Ultra');
+    });
+
+    test('a second reset within two minutes restarts on safe settings and says so', () => {
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY, 'rippl.gfxResets': resets(40, 5) } });
+        assert.equal(app.run('config.DYE_RESOLUTION'), 512);
+        assert.equal(app.run('config.EFFECT_QUALITY'), 'Low');
+        assert.equal(app.run('config.RENDER_SCALE'), 70);
+        assert.equal(app.run('config.PARTICLE_LIMIT'), 'Medium');
+        assert.equal(app.run('config.ADAPTIVE_QUALITY'), true);
+        assert.match(app.$('#toast').textContent, /kept resetting.*quality lowered/i);
+        assert.equal(JSON.parse(app.window.localStorage.getItem('rippl.device')).DYE_RESOLUTION, 512, 'the safe settings are saved');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('resets from long ago are not counted', () => {
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY, 'rippl.gfxResets': resets(4000, 600) } });
+        assert.equal(app.run('config.DYE_RESOLUTION'), 2048);
+    });
+
+    test('after four resets in two minutes the app stops reloading and explains', () => {
+        start({ storage: { ...WELCOMED, 'rippl.gfxResets': resets(60, 40, 20) } });
+        countReloads();
+        loseGraphics();
+        restoreGraphics();
+        assert.equal(app.run('reloads'), 0, 'no reload loop');
+        assert.match(app.$('.rs-fatal').textContent, /graphics keep resetting/i);
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('color sharpness is held to what the device’s memory can carry', () => {
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY }, deviceMemory: 2 });
+        app.frames(2);
+        assert.equal(app.run('config.DYE_RESOLUTION'), 2048, 'the choice itself is kept');
+        assert.equal(app.run('perf.appliedDye'), 1024);
+        assert.match(app.$('#toast').textContent, /Color sharpness limited to High on this device/);
+        app.close();
+
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY }, deviceMemory: 8 });
+        app.frames(2);
+        assert.equal(app.run('perf.appliedDye'), 2048);
+        app.close();
+
+        start({ storage: { ...WELCOMED, 'rippl.device': HEAVY } });   // a phone that reports nothing
+        app.frames(2);
+        assert.equal(app.run('perf.appliedDye'), 1536);
+    });
+
+    test('adaptive quality waits longer to raise again after a raise that didn’t hold', () => {
+        start({ storage: WELCOMED });
+        const feed = (frameMs, seconds) => app.run(`perf.emaInterval = ${frameMs}; updateAdaptive(${seconds}); perf.adaptLevel`);
+        assert.equal(feed(40, 1.6), 1, 'slow frames lower the quality');
+        assert.equal(feed(16, 5.1), 0, 'five smooth seconds raise it again');
+        assert.equal(feed(40, 1.6), 1, 'which did not hold');
+        assert.equal(feed(16, 5.1), 1, 'so five smooth seconds are no longer enough');
+        assert.equal(feed(16, 15), 0, 'twenty are');
     });
 });
 

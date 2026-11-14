@@ -16,6 +16,12 @@ The first release as an app.
 - Device settings (performance, quality, image size) are now remembered between sessions.
 - The web version installs to the home screen and works offline.
 - Welcome screen on first launch, About and Privacy screens, new original app icon.
+- Every setting has a short description (the ? button), and the settings can be searched.
+- Phones start in Balanced mode: 60 frames a second with adaptive quality on.
+- If the graphics keep resetting, the app restarts on safe settings, and stops restarting rather
+  than looping if that doesn't help.
+- Color sharpness is held to what the device's memory can carry.
+- Adaptive quality waits longer before raising quality again when a raise didn't hold.
 
 ### Changes
 - Controls that only matter when a feature is on (for example bloom intensity) are hidden until it is.

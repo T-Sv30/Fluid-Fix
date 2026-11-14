@@ -1939,6 +1939,9 @@ const perf = {
     adaptLevel: 0,
     slowTime: 0,
     fastTime: 0,
+    raiseAfter: 5,          // smooth seconds needed before quality is raised again
+    sinceRaise: Infinity,   // seconds since quality was last raised
+    dyeNoticeFor: null,
     appliedDye: null,
     appliedSim: null,
     appliedEffect: null,
@@ -1974,12 +1977,48 @@ function effEffectLevel () {
     return EFFECT_NAMES[Math.max(0, i)];
 }
 
+// The color buffers are the app's largest: half-float RGBA (8 bytes a pixel), two in use and a
+// third while they are resized. Hold them to about 4% of the device's memory. Browsers report
+// memory rounded down to 8 GB at most; where nothing is reported, assume a mid-range device.
+function dyeMemoryMB (resolution) {
+    const w = canvas.width, h = canvas.height;
+    const aspect = w > 0 && h > 0 ? Math.max(w / h, h / w) : 2;
+    return resolution * resolution * aspect * 8 * 3 / 1048576;
+}
+
+function dyeBudgetMB () {
+    const gigabytes = Number(navigator.deviceMemory) || (isMobile() ? 4 : 8);
+    return gigabytes * 1024 * 0.04;
+}
+
+function affordableDyeResolution (resolution) {
+    const levels = Object.values(QUALITY_LEVELS).filter(v => v <= resolution).sort((a, b) => b - a);
+    const budget = dyeBudgetMB();
+    for (const level of levels) {
+        if (level <= 512 || dyeMemoryMB(level) <= budget) return level;
+    }
+    return resolution;
+}
+
 function effDyeResolution () {
-    let r = Number(config.DYE_RESOLUTION);
+    let r = affordableDyeResolution(Number(config.DYE_RESOLUTION));
     if (config.BATTERY_SAVER) r = Math.min(r, 512);
     if (perf.adaptLevel >= 2) r = Math.min(r, 512);
     if (perf.adaptLevel >= 3) r = Math.min(r, 256);
     return r;
+}
+
+// Says once, per choice, when the chosen color sharpness is more than this device can carry
+function noticeDyeLimit () {
+    const wanted = Number(config.DYE_RESOLUTION);
+    const allowed = affordableDyeResolution(wanted);
+    if (allowed >= wanted) {
+        perf.dyeNoticeFor = null;
+    } else if (perf.dyeNoticeFor !== wanted) {
+        perf.dyeNoticeFor = wanted;
+        const name = Object.keys(QUALITY_LEVELS).find(k => QUALITY_LEVELS[k] === allowed);
+        showToast('Color sharpness limited to ' + name + ' on this device');
+    }
 }
 
 function effSimResolution () {
@@ -2029,13 +2068,18 @@ function measureFrame (intervalMs) {
     perf.fps = Math.round(1000 / perf.emaInterval);
 }
 
-// Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones
+// Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones.
+// When a raise doesn't hold, the next one waits four times longer (up to two minutes), so a
+// device that can't carry a level stops bouncing in and out of it.
 function updateAdaptive (dt) {
     if (!config.ADAPTIVE_QUALITY) {
         if (perf.adaptLevel !== 0) perf.adaptLevel = 0;
         perf.slowTime = perf.fastTime = 0;
+        perf.raiseAfter = 5;
+        perf.sinceRaise = Infinity;
         return;
     }
+    perf.sinceRaise += dt;
     const target = Math.min(effFpsLimit() || 60, 60);
     const fps = 1000 / perf.emaInterval;
     if (fps < target * 0.85) {
@@ -2044,14 +2088,16 @@ function updateAdaptive (dt) {
         if (perf.slowTime > 1.5 && perf.adaptLevel < ADAPT_MAX) {
             perf.adaptLevel++;
             perf.slowTime = 0;
+            perf.raiseAfter = perf.sinceRaise < 15 ? Math.min(perf.raiseAfter * 4, 120) : 5;
             showToast('Adaptive quality · lowered');
         }
     } else if (fps > target * 0.95) {
         perf.fastTime += dt;
         perf.slowTime = 0;
-        if (perf.fastTime > 5 && perf.adaptLevel > 0) {
+        if (perf.fastTime > perf.raiseAfter && perf.adaptLevel > 0) {
             perf.adaptLevel--;
             perf.fastTime = 0;
+            perf.sinceRaise = 0;
             showToast('Adaptive quality · raised');
         }
     } else {
@@ -2080,6 +2126,7 @@ function currentGlowResolution () {
 // Runs once per drawn frame, before anything is resized or rendered
 function updatePerformance (dt) {
     updateAdaptive(dt);
+    noticeDyeLimit();
     renderScaleFactor = effRenderScale();
     applyEffectLevel();
     const dyeRes = effDyeResolution(), simRes = effSimResolution();
@@ -2922,7 +2969,41 @@ function deviceSnapshot () {
     return JSON.stringify(out);
 }
 
+// ---------- Graphics resets ----------
+
+// Android can take the GPU away from the app. One reset is routine; several close together
+// mean the device can't carry the current settings.
+const GFX_RESET_WINDOW = 2 * 60 * 1000;
+const GFX_RESETS_SAFE = 2;   // this many in the window: restart on safe settings
+const GFX_RESETS_STOP = 4;   // this many: stop restarting and explain
+const SAFE_DEVICE_SETTINGS = { EFFECT_QUALITY: 'Low', PARTICLE_LIMIT: 'Medium', ADAPTIVE_QUALITY: true };
+
+function recentGraphicsResets () {
+    let list = [];
+    try { list = JSON.parse(storeGet('rippl.gfxResets') || '[]'); } catch (e) { /* damaged: start counting again */ }
+    if (!Array.isArray(list)) return [];
+    const now = Date.now();
+    return list.filter(t => typeof t === 'number' && t <= now && now - t < GFX_RESET_WINDOW);
+}
+
+function applySafeDeviceSettings () {
+    Object.assign(config, SAFE_DEVICE_SETTINGS);
+    config.DYE_RESOLUTION = Math.min(config.DYE_RESOLUTION, 512);
+    config.SIM_RESOLUTION = Math.min(config.SIM_RESOLUTION, 128);
+    config.RENDER_SCALE = Math.min(config.RENDER_SCALE, 70);
+    showToast('Graphics kept resetting · quality lowered');
+}
+
+function reloadApp () {
+    window.location.reload();
+}
+
 function loadDeviceSettings () {
+    // Phones start capped at 60 frames a second with adaptive quality on; desktops run flat out
+    if (isMobile()) {
+        Object.assign(config, PERFORMANCE_MODES.Balanced);
+        config.PERFORMANCE_MODE = 'Balanced';
+    }
     let stored = null;
     try { stored = JSON.parse(storeGet('rippl.device') || 'null'); } catch (e) { /* damaged: use the defaults */ }
     if (stored && typeof stored === 'object') {
@@ -2941,6 +3022,11 @@ function loadDeviceSettings () {
     platform.setHaptics(deviceSettings.HAPTICS);
     if (deviceSettings.KEEP_AWAKE) platform.keepAwake(true);
     deviceStore.saved = deviceSnapshot();
+    if (recentGraphicsResets().length >= GFX_RESETS_SAFE) {
+        applySafeDeviceSettings();
+        deviceStore.saved = deviceSnapshot();
+        storeSet('rippl.device', deviceStore.saved);
+    }
 }
 
 // Saves device settings shortly after they change
@@ -3721,15 +3807,20 @@ function getWebGLContext (canvas) {
 
 // Shows a readable message on the page and stops the script
 function fatal (message) {
+    const inApp = !!(window.RipplNative && window.RipplNative.isNative);
+    showFatal(message + (inApp
+        ? ' Updating “Android System WebView” from the Play Store usually fixes this.'
+        : ' Try a recent version of Chrome, Firefox or Safari.'));
+    throw new Error(message);
+}
+
+// Covers the app with a readable message
+function showFatal (text) {
     const box = document.createElement('div');
     box.setAttribute('role', 'alert');
     box.className = 'rs-fatal';
-    const inApp = !!(window.RipplNative && window.RipplNative.isNative);
-    box.textContent = message + (inApp
-        ? ' Updating “Android System WebView” from the Play Store usually fixes this.'
-        : ' Try a recent version of Chrome, Firefox or Safari.');
+    box.textContent = text;
     document.body.appendChild(box);
-    throw new Error(message);
 }
 
 function getSupportedFormat (gl, internalFormat, format, type)
@@ -5430,15 +5521,27 @@ let frameDt = 1 / 60;   // seconds covered by the current frame
 let colorUpdateTimer = 0.0;
 let contextLost = false;
 
-// Android can drop the GPU context under memory pressure. Keep the current look and reload cleanly.
+let graphicsGaveUp = false;
+
+// Android can drop the GPU context under memory pressure. Keep the current look and reload
+// cleanly; resets that keep coming lower the quality on the next start (loadDeviceSettings),
+// and after too many the app stops reloading instead of looping.
 canvas.addEventListener('webglcontextlost', e => {
     e.preventDefault();
     contextLost = true;
     try { storeSet('fluidfix.recover', JSON.stringify(snapshotValues())); } catch (err) { /* nothing to keep */ }
+    const resets = recentGraphicsResets().concat(Date.now());
+    storeSet('rippl.gfxResets', JSON.stringify(resets));
+    if (resets.length >= GFX_RESETS_STOP) {
+        graphicsGaveUp = true;
+        showFatal('The graphics keep resetting, so RIPPL Studio has stopped restarting. ' +
+                  'Close other apps, then close and reopen RIPPL Studio.');
+        return;
+    }
     showToast('Graphics were reset · restoring…');
-    setTimeout(() => window.location.reload(), 5000);   // in case the browser never restores it
+    setTimeout(() => reloadApp(), 5000);   // in case the browser never restores it
 });
-canvas.addEventListener('webglcontextrestored', () => window.location.reload());
+canvas.addEventListener('webglcontextrestored', () => { if (!graphicsGaveUp) reloadApp(); });
 
 initPresets();
 update();

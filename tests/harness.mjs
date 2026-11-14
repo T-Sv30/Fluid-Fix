@@ -59,13 +59,15 @@ function fake2D () {
     });
 }
 
-export function boot ({ native = false, storage = {} } = {}) {
+export function boot ({ native = false, storage = {}, deviceMemory } = {}) {
     const dom = new JSDOM(read('index.html'), { url: 'https://localhost/', runScripts: 'outside-only' });
     const { window } = dom;
     // A phone, so the tests exercise the mobile defaults on any machine
     Object.defineProperty(window.navigator, 'userAgent', {
         value: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36',
     });
+    // Gigabytes of memory the device reports (browsers round it; some report nothing)
+    if (deviceMemory != null) Object.defineProperty(window.navigator, 'deviceMemory', { value: deviceMemory });
     const errors = [];
     window.addEventListener('error', e => errors.push(e.error || e.message));
     Object.keys(storage).forEach(k => window.localStorage.setItem(k, storage[k]));
