@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- Particles now come from the fluid itself: each one is born where there is fluid, more of them
+  where it is brighter, and none appear on an empty screen. Before, they appeared at random
+  places whether or not any fluid was there.
+- Particles fly like firework sparks: each one sets off the way the fluid is moving where it is
+  born, is pushed outward from the center of the fluid, and gradually slows to a stop. Before,
+  they were carried along by the fluid for their whole life.
+- Two new particle settings under Movement: **Slow down** (how quickly particles lose their
+  speed) and **Outward push** (how hard they are pushed away from the middle of the fluid).
+
 ## 1.0.1
 
 ### Fixes

@@ -14,6 +14,8 @@ function openTab (label, section) {
     if (section) app.click(app.$$('.rs-subtabs .rs-chip').find(c => c.textContent === section));
 }
 
+const visibleRows = () => app.$$('.rs-body .rs-row').filter(r => !r.hidden).map(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent);
+
 function row (label) {
     const el = app.$$('.rs-body .rs-row').find(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent === label);
     assert.ok(el, 'control "' + label + '" exists');
@@ -148,7 +150,6 @@ describe('controls', () => {
 });
 
 describe('finding your way', () => {
-    const visibleRows = () => app.$$('.rs-body .rs-row').filter(r => !r.hidden).map(r => r.querySelector('.rs-label') && r.querySelector('.rs-label').textContent);
 
     test('every setting, section and button has a short description', () => {
         start({ storage: WELCOMED });
@@ -411,6 +412,58 @@ describe('device settings', () => {
         assert.equal(app.run('config.RENDER_SCALE'), 85, 'the phone default');
         assert.equal(app.run('config.DYE_RESOLUTION'), 512, 'the phone default');
         assert.equal(app.run('deviceSettings.HAPTICS'), true);
+    });
+});
+
+describe('particles', () => {
+    test('start out waiting for fluid instead of scattered over the screen', () => {
+        start({ storage: WELCOMED });
+        const ages = JSON.parse(app.run('JSON.stringify(Array.from(newParticleState(4, 4)).filter((v, i) => i % 4 === 2))'));
+        assert.equal(ages.length, 16);
+        assert.ok(ages.every(age => age < 0), 'a negative age means "not born yet"');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('each particle carries its own momentum, kept only while particles are on', () => {
+        start({ storage: WELCOMED });
+        app.run('config.PARTICLES = true');
+        app.frames(3);
+        assert.equal(app.run('!!particles.momentum'), true);
+        assert.equal(app.run('particles.momentum.read.width === particles.state.read.width && particles.momentum.read.height === particles.state.read.height'), true);
+        app.run('config.PARTICLES = false');
+        app.frames(2);
+        assert.equal(app.run('particles.momentum'), null, 'freed with the rest');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('the Speed help no longer says particles follow the fluid', () => {
+        start({ storage: WELCOMED });
+        assert.doesNotMatch(app.run('HELP.PARTICLE_SPEED'), /follow/);
+    });
+
+    test('how fast particles slow down and how hard they are pushed outward are settings', async () => {
+        start({ storage: WELCOMED });
+        // The middle of each slider is the feel the app shipped with
+        assert.equal(app.run('particleDrag()'), 1.3);
+        assert.equal(app.run('particlePush()'), 0.45);
+        app.run('config.PARTICLE_DRAG = 0; config.PARTICLE_PUSH = 0');
+        assert.equal(app.run('particleDrag()'), 0, 'at 0% particles never slow down');
+        assert.equal(app.run('particlePush()'), 0, 'at 0% nothing pushes them outward');
+        app.run('config.PARTICLE_DRAG = 100; config.PARTICLE_PUSH = 100');
+        assert.ok(app.run('particleDrag()') > 1.3);
+        assert.ok(app.run('particlePush()') > 0.45);
+
+        openTab('Layers', 'Particles');
+        app.click(row('Particles'));
+        await app.settle();
+        assert.ok(visibleRows().includes('Slow down'));
+        assert.ok(visibleRows().includes('Outward push'));
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('the Spread help says particles come from the fluid', () => {
+        start({ storage: WELCOMED });
+        assert.match(app.run('HELP.PARTICLE_SPREAD'), /fluid/);
     });
 });
 
