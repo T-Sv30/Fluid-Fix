@@ -305,6 +305,58 @@ describe('presets', () => {
         assert.equal(app.run('presetState.current'), 'Default');
     });
 
+    test('saving always makes a new preset and leaves the others alone', () => {
+        start({ storage: WELCOMED });
+        app.run('config.CURL = 5; presetSave()');
+        app.run('config.CURL = 9; presetSave()');
+        assert.deepEqual(JSON.parse(app.run('JSON.stringify(presetState.user.map(p => [p.name, p.values.CURL]))')),
+            [['My preset', 5], ['My preset 2', 9]]);
+        assert.equal(app.run('presetState.current'), 'My preset 2');
+        assert.equal(app.$('#modal').hidden, true);
+    });
+
+    test('with all 10 spaces full, saving asks which preset to overwrite', () => {
+        start({ storage: WELCOMED });
+        for (let i = 0; i < 10; i++) app.run('config.CURL = ' + i + '; presetSave()');
+        assert.equal(app.run('presetState.user.length'), 10);
+
+        app.run('config.CURL = 25; presetSave()');
+        assert.equal(app.run('presetState.user.length'), 10, 'nothing is added or changed before choosing');
+        assert.equal(app.$('#modal').hidden, false);
+        assert.match(app.$('#modal-text').textContent, /overwrite/);
+        const choices = app.$$('.modal-btn').map(b => b.textContent);
+        assert.deepEqual(choices, ['My preset', ...[2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => 'My preset ' + n), 'Cancel']);
+
+        app.click(app.$$('.modal-btn').find(b => b.textContent === 'My preset 4'));
+        assert.equal(app.$('#modal').hidden, true);
+        const saved = JSON.parse(app.run('JSON.stringify(presetState.user.map(p => [p.name, p.values.CURL]))'));
+        assert.equal(saved.length, 10);
+        assert.deepEqual(saved[3], ['My preset 4', 25], 'the chosen one is overwritten and keeps its name');
+        assert.deepEqual(saved.filter((p, i) => i !== 3).map(p => p[1]), [0, 1, 2, 4, 5, 6, 7, 8, 9], 'the rest are untouched');
+        assert.equal(app.run('presetState.current'), 'My preset 4');
+        assert.deepEqual(app.errors, []);
+    });
+
+    test('cancelling the overwrite question changes nothing', () => {
+        start({ storage: WELCOMED });
+        for (let i = 0; i < 10; i++) app.run('config.CURL = ' + i + '; presetSave()');
+        app.run('config.CURL = 25; presetSave()');
+        app.click(app.$$('.modal-btn').find(b => b.textContent === 'Cancel'));
+        assert.deepEqual(JSON.parse(app.run('JSON.stringify(presetState.user.map(p => p.values.CURL))')), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    });
+
+    test('duplicating into full spaces also asks which preset to replace', () => {
+        start({ storage: WELCOMED });
+        for (let i = 0; i < 10; i++) app.run('presetSave()');
+        app.run('presetClone()');
+        assert.equal(app.run('presetState.user.length'), 10);
+        assert.equal(app.$('#modal').hidden, false);
+        app.click(app.$$('.modal-btn').find(b => b.textContent === 'My preset 2'));
+        const names = JSON.parse(app.run('JSON.stringify(presetState.user.map(p => p.name))'));
+        assert.equal(names.length, 10);
+        assert.equal(names[1], 'My preset 10 copy');
+    });
+
     test('saved looks come back after a restart', () => {
         start({ storage: WELCOMED });
         app.run("config.PALETTE = 'Fire'; config.CURL = 7; presetSave()");

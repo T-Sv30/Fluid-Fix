@@ -1089,6 +1089,13 @@ body.hide-ui .rs-sheet {
     margin-top: var(--rs-s4);
 }
 
+/* A list of choices, one per line (choosing which preset to overwrite) */
+.modal-actions.stacked {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+}
+
 .modal-btn {
     appearance: none;
     -webkit-appearance: none;

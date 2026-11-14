@@ -11,6 +11,9 @@
   they were carried along by the fluid for their whole life.
 - Two new particle settings under Movement: **Slow down** (how quickly particles lose their
   speed) and **Outward push** (how hard they are pushed away from the middle of the fluid).
+- **Save this look** now always makes a new preset and leaves the ones already saved alone.
+  There are 10 preset spaces; once they are full, saving (or duplicating, importing or starting a
+  blank preset) asks which one to overwrite. Before, saving silently overwrote the selected preset.
 
 ## 1.0.1
 

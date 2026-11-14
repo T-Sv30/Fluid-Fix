@@ -2423,6 +2423,8 @@ const BUILTIN_PRESETS = {
     'Starry Galaxy': { SIM_MODE: 'Galaxy', FORCE_FIELD: 'Vortex', FIELD_STRENGTH: 45, CURL: 25, PALETTE: 'Galaxy', BACKGROUND: 'Midnight', PARTICLES: true, PARTICLE_STYLE: 'Dust', PARTICLE_AMOUNT: 'Ultra' },
 };
 
+const PRESET_SPACES = 10;   // how many presets of your own fit before one has to be replaced
+
 const presetState = {
     user: [],          // [{ name, values }]
     current: 'Default',
@@ -2492,31 +2494,61 @@ function selectPreset (name, apply) {
     refreshPresetList();
 }
 
-function presetSave () {
-    if (isBuiltin(presetState.current)) {
-        const name = uniqueName('My preset');
-        presetState.user.push({ name, values: snapshotValues() });
-        selectPreset(name, false);
-        showToast('Saved as ' + name);
-    } else {
-        findUserPreset(presetState.current).values = snapshotValues();
-        saveStoredPresets();
-        showToast('Saved ' + presetState.current);
+// Every way of adding a preset comes through here. It takes a free space while there is one and
+// never touches the presets already saved; with every space full it asks which one to give up.
+//   entry: { name, values, apply (also switch the app to these values), keepName (the replaced
+//   preset keeps its own name), said (toast for a new space), question (what the dialog asks) }
+function addPreset (entry) {
+    const done = (name, message) => {
+        selectPreset(name, !!entry.apply);
+        showToast(message);
+    };
+    if (presetState.user.length < PRESET_SPACES) {
+        presetState.user.push({ name: entry.name, values: entry.values });
+        done(entry.name, entry.said);
+        return;
     }
+    openModal({
+        title: 'All ' + PRESET_SPACES + ' preset spaces are full',
+        text: entry.question,
+        stacked: true,
+        buttons: presetState.user.map(old => ({
+            label: old.name,
+            action: () => {
+                const was = old.name;
+                old.values = entry.values;
+                if (!entry.keepName) old.name = entry.name;
+                done(old.name, entry.keepName ? 'Saved over ' + was : 'Replaced ' + was + ' with ' + old.name);
+            },
+        })).concat([{ label: 'Cancel' }]),
+    });
+}
+
+function presetSave () {
+    const name = uniqueName('My preset');
+    addPreset({
+        name, values: snapshotValues(), keepName: true,
+        said: 'Saved as ' + name,
+        question: 'Choose a preset to overwrite with the look on screen now.',
+    });
 }
 
 function presetNew () {
     const name = uniqueName('Preset');
-    presetState.user.push({ name, values: JSON.parse(JSON.stringify(DEFAULT_VALUES)) });
-    selectPreset(name, true);
-    showToast('New preset · ' + name);
+    addPreset({
+        name, values: JSON.parse(JSON.stringify(DEFAULT_VALUES)), apply: true,
+        said: 'New preset · ' + name,
+        question: 'Choose a preset to replace with a new blank one.',
+    });
 }
 
 function presetClone () {
     const name = uniqueName(safeName(presetState.current + ' copy'));
-    presetState.user.push({ name, values: snapshotValues() });
-    selectPreset(name, false);
-    showToast('Cloned as ' + name);
+    addPreset({
+        name, values: snapshotValues(),
+        said: 'Cloned as ' + name,
+        question: 'Choose a preset to replace with the copy.',
+    });
 }
 
 function presetRename (newName) {
@@ -2618,10 +2650,12 @@ function importPresetText (text) {
         return;
     }
     const name = uniqueName(safeName(data.name, 'Imported'));
-    presetState.user.push({ name, values });
     closeModal();
-    selectPreset(name, true);
-    showToast('Imported ' + name);
+    addPreset({
+        name, values, apply: true,
+        said: 'Imported ' + name,
+        question: 'Choose a preset to replace with “' + name + '”.',
+    });
 }
 
 function resetSimulation () {
@@ -2797,6 +2831,7 @@ function openModal (opts) {
     file.value = '';
     const actions = document.getElementById('modal-actions');
     actions.innerHTML = '';
+    actions.classList.toggle('stacked', !!opts.stacked);   // a list of choices, one per line
     modalButtons = opts.buttons || [{ label: 'OK', primary: true }];
     modalButtons.forEach(b => {
         const btn = document.createElement('button');
@@ -3858,7 +3893,7 @@ function startUI () {
             select: name => { selectPreset(name, true); showToast(name); },
             actions: [
                 { label: 'Save this look', icon: 'save', run: presetSave, primary: true, wide: true,
-                  help: 'Keeps the current settings. Updates the selected preset, or makes a new one if a built-in is selected.' },
+                  help: 'Keeps the current settings as a new preset, leaving the others as they are. Once all ' + PRESET_SPACES + ' spaces are full, it asks which one to overwrite.' },
                 { label: 'Rename', icon: 'edit', run: presetRenamePrompt, disabled: builtinNow, help: 'Gives the selected preset a new name.' },
                 { label: 'Duplicate', icon: 'copy', run: presetClone, help: 'Makes a copy of the current settings as a new preset.' },
                 { label: 'Share', icon: 'share', run: presetExport, help: 'Sends the selected preset to someone, as a file or as text.' },
