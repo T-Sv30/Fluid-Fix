@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.2
 
 ### Changes
 - The menu is now almost see-through, so the fluid stays visible behind it; text and controls
