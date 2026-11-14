@@ -1,39 +1,30 @@
 # RIPPL Studio
 
-An interactive WebGL fluid simulation that runs in desktop and mobile browsers. Drag across the screen to stir the fluid; open the settings panel to change resolution, colors, bloom, sunrays and more.
+Paint with living fluid. RIPPL Studio is an interactive WebGL fluid simulation, shipped as an **Android app** and as a **web app** from the same code.
 
 <img src="screenshot.jpg" width="880">
 
-**Live:** https://t-sv30.github.io/RIPPL-Studio/
+**Web:** https://t-sv30.github.io/RIPPL-Studio/ (installable, works offline) · **Privacy:** [policy](https://t-sv30.github.io/RIPPL-Studio/privacy.html) · **Changes:** [CHANGELOG.md](CHANGELOG.md)
 
-## Features
+## Using it
 
-Everything is in the controls panel (top right). Its top rows give one-tap access to **Randomize**, **Freeze / Resume**, **Next palette**, **Auto-play**, **Vortex**, **Random splats**, **Clear fluid**, **Undo**, **Redo**, **Screenshot** and **Fullscreen**.
+Drag anywhere to stir the fluid; several fingers work at once. The dock at the bottom has the everyday actions:
 
-| Feature | What it does | Key |
+| Dock button | What it does | Key |
 |---|---|---|
-| Rainbow mode | Colors continuously sweep around the color wheel | N |
-| Color presets | 11 palettes: Classic, Sunset, Ocean, Aurora, Fire, Neon, Candy, Forest, Galaxy, Ice, Gold | C (next) |
-| Randomize | New palette, background, motion and symmetry in one tap | R |
-| Auto-play | Three streams paint by themselves on slow, wandering paths, with occasional bursts | A |
-| Vortex | Orbiting arms stir a continuous whirlpool around the center | V |
-| Mirror | None, Horizontal, Vertical, Diagonal or Complex (4-way) symmetry | M (cycle) |
-| Kaleidoscope | 2–10 rotated and reflected segments around the center | K |
-| Color trails | Dye fades about 8× slower, leaving long trails | T |
-| Blacklight | Fluorescent colors under UV light, with intensity, fluorescence and 8 UV color modes | B |
-| Background presets | Black, Midnight, Nebula, Deep Ocean, Ember, Forest, Charcoal, Paper, Custom (crossfades) | |
-| Dissipation | How long color takes to fade away: 0% = 0.2 s, 100% = 3 s | |
-| Speed | Simulation speed: 0% stopped, 50% normal, 100% = 3× (sub-stepped to stay stable) | |
-| Touch force | Strength of every touch and emitter: 50% normal, 100% = 3× | |
-| Freeze / resume | Stops the motion; you can still paint on the frozen image | F or P |
-| Random color on touch | Each new touch injects a burst of random colors | I |
-| Auto transitions | Smoothly crossfades to the next palette every few seconds | |
+| Presets | Opens the gallery of saved looks | |
+| Random | New palette, background, motion and symmetry in one tap | R |
+| Controls | Opens the sheet with every setting | |
+| Freeze | Stops the motion; you can still paint on the frozen image | F or P |
+| Capture | Saves an image (to the gallery in the app, as a download in a browser) | |
 
-Space adds random splats, H hides the controls panel, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles, L cycles the particle style and Q cycles the simulation mode.
+In the Controls sheet, drag the handle to resize it or flick it down to close. While you move a slider the sheet turns see-through so you can watch the fluid change. The eye icon hides every control; tap the small arrow at the bottom (or press Back / Esc / H) to bring them back. Undo and redo sit at the top of the sheet.
+
+More keys: Space adds random splats, C next palette, A auto-play, V vortex, M mirror, K kaleidoscope, T trails, B blacklight, N rainbow, I random color per touch, G / J / X cycle the gesture mode, injection mode and force field, O toggles particles, L cycles the particle style, Q cycles the simulation mode, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 
 ## Settings
 
-Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value. The panel is grouped like this:
+Every setting from the original control panel is still here, now grouped into the tabs of the Controls sheet (Scene, Touch, Look, Physics, Particles, Text, System). Sliders run from 0 to 100% and each is mapped to a tuned engine value. What each group contains:
 
 - **Presets:** choose a preset (six built in: Default, Aurora Dream, Lava Lamp, Neon Party, Ink on Paper, Starry Galaxy), rename it, save, new, clone, random, export (copy, share or download as JSON), load (paste or open a JSON file), delete, and reset simulation. Presets are saved on this device, and the last one you used opens next time. Undo and redo (also Ctrl+Z / Ctrl+Shift+Z) step through settings changes.
 - **Simulation → simulation mode:** one-tap scenes built from the forces below. Each sets its own forces, fields and edges, and most keep the scene moving on their own:
@@ -52,8 +43,8 @@ Every slider runs from 0 to 100%, and each one is mapped to a tuned engine value
 - **Performance:** performance mode (Battery Saver, Balanced, Performance, Maximum Performance presets), frame rate limit (15–120 FPS or Unlimited), adaptive quality (steps render scale, dye resolution and effect quality down when frames run slow, and back up when they recover), render scale (internal resolution, 0% = 25%), effect quality (bloom, sunrays and glow resolution), particle limit, battery saver (caps at 30 FPS, 70% render scale, Low effects, 1,024 particles), and a live FPS readout
 - **Text:** text on/off, text mode (Paint: the letters keep pouring color into the fluid; Obstacle: the fluid flows around solid letters), edit text (multiple lines), font, font size, text color, outline and thickness, text glow and intensity, position x / y, rotation, opacity
 - **Background:** Black, White, Transparent (transparent screenshots), Custom (with a color picker) and the gradient presets, plus brightness, blur (a soft out-of-focus copy of the fluid behind it) and opacity
-- **Wallpaper:** splashes (gentle automatic splashes), clear on return (starts fresh when you come back to the page), and set live wallpaper (explains the options, since a web page can't install itself as an Android wallpaper)
-- **Modes, Colors, Capture**
+- **Capture:** save image (to the gallery in the app), share image, image size (720p, 1080p, 1440p), transparent background, gentle automatic splashes, start fresh when you come back, hide the controls
+- **App:** haptic feedback, keep the screen on, About, Privacy
 
 Simulation speed stays real-time at any frame rate limit: the solver sub-steps long frames, emitters keep their 60-per-second rhythm, and fast strokes are filled in between frames.
 
@@ -63,9 +54,34 @@ Screen filters only run while at least one is switched on, so they cost nothing 
 
 Gravity, buoyancy and flow direction act on the colored fluid, so dense color sinks, rises or drifts while clear areas stay calm. In Wrap and Void modes a directional flow also moves the whole field.
 
-## Run it
+## Develop
 
-Open `index.html` in a browser, or serve the folder with any static web server (e.g. `python3 -m http.server`).
+Needs Node 20 or newer. The web app has no build step: the files in the repo root are what GitHub Pages serves.
+
+```sh
+npm install
+npm start          # http://localhost:8080
+npm run check      # lint + tests + build (what CI runs)
+```
+
+| File | Role |
+|---|---|
+| `script.js` | The engine: simulation, shaders, presets, and the description of every setting |
+| `ui.js`, `ui.css` | The interface: dock, sheet, tabs and controls, drawn from that description |
+| `native.js` | Platform bridge: haptics, saving and sharing files, Back button; web fallbacks |
+| `sw.js`, `manifest.webmanifest` | Offline support and install for the web version |
+| `android/` | The Android shell (Capacitor) and the small `RipplDevice` plugin |
+| `tests/` | The whole app run in jsdom with a stand-in for WebGL |
+
+### Android app
+
+Every pull request builds a debug APK in GitHub Actions; download it from the run's **Artifacts** and install it on a phone. To build locally you need JDK 21 and the Android SDK:
+
+```sh
+npm run android:debug     # android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Releasing to Google Play (signing key, secrets, store listing) is covered in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Credits
 

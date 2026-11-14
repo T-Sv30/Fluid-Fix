@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RIPPL Studio</string>
+    <string name="title_activity_main">RIPPL Studio</string>
+    <string name="package_name">io.github.tsv30.ripplstudio</string>
+    <string name="custom_url_scheme">io.github.tsv30.ripplstudio</string>
+</resources>

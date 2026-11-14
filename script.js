@@ -24,6 +24,10 @@ SOFTWARE.
 
 'use strict';
 
+const APP_VERSION = '1.0.0';
+
+const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
 // Simulation section
 
 // Internal render scale (Performance → render scale); a var so it exists before config is created
@@ -35,7 +39,7 @@ resizeCanvas();
 let config = {
     SIM_RESOLUTION: 128,
     DYE_RESOLUTION: 1024,
-    CAPTURE_RESOLUTION: 512,
+    CAPTURE_RESOLUTION: 1080,
     DENSITY_DISSIPATION: 1,
     VELOCITY_DISSIPATION: 0.2,
     PRESSURE: 0.8,
@@ -265,7 +269,7 @@ let paletteFadeTime = 1.2;
 let paletteHold = 0;
 
 function setPalette (name, fadeSeconds) {
-    if (!PALETTES.hasOwnProperty(name)) return;
+    if (!has(PALETTES, name)) return;
     paletteFrom = paletteMix < 0.5 ? paletteFrom : paletteTo;
     paletteTo = name;
     paletteMix = 0;
@@ -551,29 +555,21 @@ function cyclePalette () {
     showToast('Palette · ' + next);
 }
 
-// GUI helpers
+// Interface helpers
 
-let guiRoot = null;
-
-function refreshGUI (gui, openOnly) {
-    if (!gui) syncUI();
-    gui = gui || guiRoot;
-    if (!gui) return;
-    if (openOnly && gui.closed) return;
-    gui.__controllers.forEach(c => c.updateDisplay());
-    Object.keys(gui.__folders).forEach(k => refreshGUI(gui.__folders[k], openOnly));
+// Re-reads every visible control after the app changes settings by itself
+function refreshGUI () {
+    if (window.RipplUI) window.RipplUI.refresh();
 }
 
-// Keeps the visible panel in step with changes the app makes by itself (auto palettes, Freeze, fps).
-// Runs 4 times a second and only for open folders, instead of every frame for every control.
+// Keeps the dock, status line and open panel in step with the app. Runs 4 times a second.
 let panelRefreshTimer = 0;
 
 function refreshOpenPanel (dt) {
     panelRefreshTimer += dt;
-    if (panelRefreshTimer < 0.25 || !guiRoot || guiRoot.closed) return;
+    if (panelRefreshTimer < 0.25) return;
     panelRefreshTimer = 0;
-    syncUI();
-    refreshGUI(guiRoot, true);
+    window.RipplUI.tick();
 }
 
 let toastTimer = null;
@@ -653,23 +649,6 @@ const PCT = {
     SUNRAYS_W:       { cfg: 'SUNRAYS_WEIGHT',       to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
     RAINBOW_SPD:     { cfg: 'RAINBOW_SPEED',        to: pctLinTo(0, 1),      from: pctLinFrom(0, 1) },
 };
-
-const ui = {};
-
-function syncUI () {
-    Object.keys(PCT).forEach(k => {
-        const m = PCT[k];
-        ui[k] = Math.round(Math.min(100, Math.max(0, m.from(config[m.cfg]))));
-    });
-}
-syncUI();
-
-function addPct (folder, key, label) {
-    const m = PCT[key];
-    return folder.add(ui, key, 0, 100).step(1).name(label).onChange(v => {
-        config[m.cfg] = m.to(v);
-    });
-}
 
 const QUALITY_LEVELS = { 'Very Low': 128, 'Low': 256, 'Medium': 512, 'High': 1024, 'Super High': 1536, 'Ultra High': 2048 };
 const PRESSURE_LEVELS = { 'Low': 10, 'Norm': 20, 'Max': 50 };
@@ -1041,7 +1020,7 @@ function applyGlow () {
     copyProgram.bind();
     gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
     blit(glowFBO);
-    blur(glowFBO, glowTemp, 1 + Math.round(config.GLOW_RADIUS / 100 * 11));
+    blurTarget(glowFBO, glowTemp, 1 + Math.round(config.GLOW_RADIUS / 100 * 11));
 }
 
 function uvColor () {
@@ -1760,7 +1739,7 @@ const SIM_MODE_NAMES = Object.keys(SIM_MODES);
 const modeState = { t: 0, timer: 0, prev: [] };
 
 function applySimMode (name) {
-    if (!SIM_MODES.hasOwnProperty(name)) return;
+    if (!has(SIM_MODES, name)) return;
     Object.assign(config, MODE_BASE, SIM_MODES[name]);
     config.SIM_MODE = name;
     modeState.t = 0;
@@ -1960,13 +1939,16 @@ const perf = {
     adaptLevel: 0,
     slowTime: 0,
     fastTime: 0,
+    raiseAfter: 5,          // smooth seconds needed before quality is raised again
+    sinceRaise: Infinity,   // seconds since quality was last raised
+    dyeNoticeFor: null,
     appliedDye: null,
     appliedSim: null,
     appliedEffect: null,
 };
 
 function applyPerformanceMode (name) {
-    if (!PERFORMANCE_MODES.hasOwnProperty(name)) return;
+    if (!has(PERFORMANCE_MODES, name)) return;
     Object.assign(config, PERFORMANCE_MODES[name]);
     config.PERFORMANCE_MODE = name;
     perf.adaptLevel = 0;
@@ -1995,12 +1977,48 @@ function effEffectLevel () {
     return EFFECT_NAMES[Math.max(0, i)];
 }
 
+// The color buffers are the app's largest: half-float RGBA (8 bytes a pixel), two in use and a
+// third while they are resized. Hold them to about 4% of the device's memory. Browsers report
+// memory rounded down to 8 GB at most; where nothing is reported, assume a mid-range device.
+function dyeMemoryMB (resolution) {
+    const w = canvas.width, h = canvas.height;
+    const aspect = w > 0 && h > 0 ? Math.max(w / h, h / w) : 2;
+    return resolution * resolution * aspect * 8 * 3 / 1048576;
+}
+
+function dyeBudgetMB () {
+    const gigabytes = Number(navigator.deviceMemory) || (isMobile() ? 4 : 8);
+    return gigabytes * 1024 * 0.04;
+}
+
+function affordableDyeResolution (resolution) {
+    const levels = Object.values(QUALITY_LEVELS).filter(v => v <= resolution).sort((a, b) => b - a);
+    const budget = dyeBudgetMB();
+    for (const level of levels) {
+        if (level <= 512 || dyeMemoryMB(level) <= budget) return level;
+    }
+    return resolution;
+}
+
 function effDyeResolution () {
-    let r = Number(config.DYE_RESOLUTION);
+    let r = affordableDyeResolution(Number(config.DYE_RESOLUTION));
     if (config.BATTERY_SAVER) r = Math.min(r, 512);
     if (perf.adaptLevel >= 2) r = Math.min(r, 512);
     if (perf.adaptLevel >= 3) r = Math.min(r, 256);
     return r;
+}
+
+// Says once, per choice, when the chosen color sharpness is more than this device can carry
+function noticeDyeLimit () {
+    const wanted = Number(config.DYE_RESOLUTION);
+    const allowed = affordableDyeResolution(wanted);
+    if (allowed >= wanted) {
+        perf.dyeNoticeFor = null;
+    } else if (perf.dyeNoticeFor !== wanted) {
+        perf.dyeNoticeFor = wanted;
+        const name = Object.keys(QUALITY_LEVELS).find(k => QUALITY_LEVELS[k] === allowed);
+        showToast('Color sharpness limited to ' + name + ' on this device');
+    }
 }
 
 function effSimResolution () {
@@ -2050,13 +2068,18 @@ function measureFrame (intervalMs) {
     perf.fps = Math.round(1000 / perf.emaInterval);
 }
 
-// Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones
+// Adaptive quality: step down after 1.5 s of slow frames, back up after 5 s of smooth ones.
+// When a raise doesn't hold, the next one waits four times longer (up to two minutes), so a
+// device that can't carry a level stops bouncing in and out of it.
 function updateAdaptive (dt) {
     if (!config.ADAPTIVE_QUALITY) {
         if (perf.adaptLevel !== 0) perf.adaptLevel = 0;
         perf.slowTime = perf.fastTime = 0;
+        perf.raiseAfter = 5;
+        perf.sinceRaise = Infinity;
         return;
     }
+    perf.sinceRaise += dt;
     const target = Math.min(effFpsLimit() || 60, 60);
     const fps = 1000 / perf.emaInterval;
     if (fps < target * 0.85) {
@@ -2065,14 +2088,16 @@ function updateAdaptive (dt) {
         if (perf.slowTime > 1.5 && perf.adaptLevel < ADAPT_MAX) {
             perf.adaptLevel++;
             perf.slowTime = 0;
+            perf.raiseAfter = perf.sinceRaise < 15 ? Math.min(perf.raiseAfter * 4, 120) : 5;
             showToast('Adaptive quality · lowered');
         }
     } else if (fps > target * 0.95) {
         perf.fastTime += dt;
         perf.slowTime = 0;
-        if (perf.fastTime > 5 && perf.adaptLevel > 0) {
+        if (perf.fastTime > perf.raiseAfter && perf.adaptLevel > 0) {
             perf.adaptLevel--;
             perf.fastTime = 0;
+            perf.sinceRaise = 0;
             showToast('Adaptive quality · raised');
         }
     } else {
@@ -2101,6 +2126,7 @@ function currentGlowResolution () {
 // Runs once per drawn frame, before anything is resized or rendered
 function updatePerformance (dt) {
     updateAdaptive(dt);
+    noticeDyeLimit();
     renderScaleFactor = effRenderScale();
     applyEffectLevel();
     const dyeRes = effDyeResolution(), simRes = effSimResolution();
@@ -2215,7 +2241,7 @@ function cleanValues (values) {
     const out = {};
     if (!values || typeof values !== 'object') return out;
     Object.keys(values).forEach(k => {
-        if (SNAPSHOT_EXCLUDE.has(k) || !config.hasOwnProperty(k)) return;
+        if (SNAPSHOT_EXCLUDE.has(k) || !has(config, k)) return;
         const v = validValue(k, values[k]);
         if (v !== undefined) out[k] = v;
     });
@@ -2238,13 +2264,8 @@ function applyValues (values, fromDefaults) {
 
 // ---------- Presets ----------
 
-const ui7 = { preset: 'Default', presetName: 'Default' };
-let presetCtrl = null;
-
-function rebuildPresetDropdown () {
-    if (!presetCtrl || !presetCtrl.options) return;
-    presetCtrl = presetCtrl.options(presetNames()).name('preset').onChange(v => selectPreset(v, true));
-    presetCtrl.updateDisplay();
+function refreshPresetList () {
+    if (window.RipplUI) window.RipplUI.refreshPresets();
 }
 
 // Restores the last preset used on this device; runs once everything is initialized
@@ -2309,6 +2330,7 @@ function saveStoredPresets () {
 function safeName (name, fallback) {
     const clean = String(name == null ? '' : name)
         .replace(/[<>&"'`\\]/g, '')
+        // eslint-disable-next-line no-control-regex -- stripping control characters is the point
         .replace(/[\u0000-\u001f\u007f]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
@@ -2321,7 +2343,7 @@ function presetNames () {
 }
 
 function isBuiltin (name) {
-    return BUILTIN_PRESETS.hasOwnProperty(name);
+    return has(BUILTIN_PRESETS, name);
 }
 
 function findUserPreset (name) {
@@ -2339,14 +2361,12 @@ function uniqueName (base) {
 
 function selectPreset (name, apply) {
     presetState.current = name;
-    ui7.preset = name;
-    ui7.presetName = name;
     if (apply) {
         const values = isBuiltin(name) ? BUILTIN_PRESETS[name] : (findUserPreset(name) || {}).values;
         applyValues(values || {}, true);
     }
     saveStoredPresets();
-    rebuildPresetDropdown();
+    refreshPresetList();
 }
 
 function presetSave () {
@@ -2378,22 +2398,35 @@ function presetClone () {
 
 function presetRename (newName) {
     newName = safeName(newName, '');
-    if (!newName || newName === presetState.current) { ui7.presetName = presetState.current; refreshGUI(); return; }
+    if (!newName || newName === presetState.current) return;
     if (isBuiltin(presetState.current)) {
-        ui7.presetName = presetState.current;
-        refreshGUI();
-        showToast('Built-in presets can’t be renamed · clone it first');
+        showToast('Built-in presets can’t be renamed · duplicate it first');
         return;
     }
     if (presetNames().indexOf(newName) !== -1) {
-        ui7.presetName = presetState.current;
-        refreshGUI();
         showToast('A preset called ' + newName + ' already exists');
         return;
     }
     findUserPreset(presetState.current).name = newName;
     selectPreset(newName, false);
     showToast('Renamed to ' + newName);
+}
+
+function presetRenamePrompt () {
+    if (isBuiltin(presetState.current)) {
+        showToast('Built-in presets can’t be renamed · duplicate it first');
+        return;
+    }
+    openModal({
+        title: 'Rename preset',
+        input: presetState.current,
+        singleLine: true,
+        label: 'Preset name',
+        buttons: [
+            { label: 'Cancel' },
+            { label: 'Rename', primary: true, action: presetRename },
+        ],
+    });
 }
 
 function presetDelete () {
@@ -2419,24 +2452,31 @@ function presetDelete () {
 function presetExport () {
     const name = presetState.current;
     const json = JSON.stringify({ app: 'RIPPL Studio', version: 1, name, values: snapshotValues() }, null, 2);
+    const filename = (name.replace(/[^\w\- ]+/g, '').trim() || 'preset') + '.rippl.json';
+    const file = () => new Blob([json], { type: 'application/json' });
     const buttons = [{ label: 'Close' }];
-    if (navigator.share)
-        buttons.push({ label: 'Share', action: () => { navigator.share({ title: 'RIPPL Studio preset · ' + name, text: json }).catch(() => {}); } });
-    buttons.push({ label: 'Download', action: () => downloadText(name.replace(/[^\w\- ]+/g, '') + '.rippl.json', json) });
+    if (platform.canShare())
+        buttons.push({ label: 'Share', action: () => {
+            platform.shareFile(file(), filename, 'RIPPL Studio preset · ' + name)
+                .catch(() => showToast('Couldn’t share the preset · try Copy instead'));
+        } });
+    if (!platform.isNative)
+        buttons.push({ label: 'Download', action: () => downloadText(filename, json) });
     buttons.push({ label: 'Copy', primary: true, action: () => copyText(json) });
-    openModal({ title: 'Export preset', text: 'Share this with anyone using RIPPL Studio. They can bring it in with Load preset.', input: json, readOnly: true, buttons });
+    openModal({ title: 'Share preset', text: 'Send this to anyone using RIPPL Studio. They can bring it in with Import.', input: json, readOnly: true, label: 'Preset data', buttons });
 }
 
 function presetImport () {
     openModal({
-        title: 'Load preset',
+        title: 'Import preset',
         text: 'Paste a preset someone shared with you, or choose a .json file.',
         input: '',
         placeholder: '{ "app": "RIPPL Studio", ... }',
+        label: 'Preset data',
         file: true,
         buttons: [
             { label: 'Cancel' },
-            { label: 'Load', primary: true, keepOpen: true, action: (text) => importPresetText(text) },
+            { label: 'Import', primary: true, keepOpen: true, action: (text) => importPresetText(text) },
         ],
     });
 }
@@ -2458,7 +2498,7 @@ function importPresetText (text) {
     presetState.user.push({ name, values });
     closeModal();
     selectPreset(name, true);
-    showToast('Loaded ' + name);
+    showToast('Imported ' + name);
 }
 
 function resetSimulation () {
@@ -2550,11 +2590,14 @@ function toggleFullscreen () {
 
 function showWallpaperInfo () {
     openModal({
-        title: 'Live wallpaper',
-        text: 'A web page can’t install itself as an Android live wallpaper; that needs a native app. ' +
-              'For a wallpaper-like screen: turn on Splashes or Auto-play, tap Fullscreen, and keep the screen on. ' +
-              'Your current preset is kept the next time you open RIPPL Studio on this device.',
-        buttons: [{ label: 'Go fullscreen', action: toggleFullscreen }, { label: 'OK', primary: true }],
+        title: 'Use as a wallpaper',
+        text: 'A true Android live wallpaper is planned for a later release. Until then, two options: ' +
+              'save an image and set it as your wallpaper from your gallery, or for a living display turn on ' +
+              '“Gentle automatic splashes” and “Keep the screen on”, then hide the controls.',
+        buttons: [
+            { label: 'Hide the controls', action: () => window.RipplUI.setHidden(true) },
+            { label: 'OK', primary: true },
+        ],
     });
 }
 
@@ -2609,6 +2652,7 @@ function downloadText (filename, text) {
 
 let modalButtons = [];
 let modalReturnFocus = null;
+let modalSingleLine = false;
 
 function openModal (opts) {
     const m = document.getElementById('modal');
@@ -2621,6 +2665,10 @@ function openModal (opts) {
     input.value = opts.input || '';
     input.readOnly = !!opts.readOnly;
     input.placeholder = opts.placeholder || '';
+    input.classList.toggle('single', !!opts.singleLine);
+    input.rows = opts.singleLine ? 1 : 5;
+    input.setAttribute('aria-label', opts.label || opts.title || 'Text');
+    modalSingleLine = !!opts.singleLine;
     const file = document.getElementById('modal-file');
     file.hidden = !opts.file;
     file.value = '';
@@ -2674,6 +2722,13 @@ function modalOpen () {
         if (!modalOpen()) return;
         if (e.key === 'Escape') {
             closeModal();
+            return;
+        }
+        if (e.key === 'Enter' && modalSingleLine && e.target && e.target.id === 'modal-input') {
+            // A one-line field: Enter confirms instead of adding a new line
+            e.preventDefault();
+            const primary = m.querySelector('.modal-btn.primary');
+            if (primary) primary.click();
             return;
         }
         if (e.key === 'Tab') {
@@ -2883,158 +2938,818 @@ function applyBackgroundBlur () {
     copyProgram.bind();
     gl.uniform1i(copyProgram.uniforms.uTexture, dye.read.attach(0));
     blit(bgBlurFBO);
-    blur(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
+    blurTarget(bgBlurFBO, bgBlurTemp, 2 + Math.round(config.BG_BLUR / 100 * 10));
 }
 
-// ---------- Control panel ----------
+// ---------- Interface ----------
+// Every setting is described here as plain data; ui.js turns the description into touch controls.
 
-const ICONS = {
-    logo:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5',
-    sparkle:   'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
-    pause:     'M8 5v14 M16 5v14',
-    play:      'M7 4.5l12 7.5-12 7.5z',
-    clear:     'M4 15l8.5-8.5 6 6L13 18H7z M10 9l6 6 M13 21h7',
-    drop:      'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
-    palette:   'M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.4-1.9-.3-1 .3-2.1 1.4-2.1H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z M7.5 11h.01 M10.5 7h.01 M15.5 7.5h.01',
-    wave:      'M3 12c2.5-5 5.5-5 8 0s5.5 5 8 0 M3 17c2.5-3 5.5-3 8 0s5.5 3 8 0 M3 7c2.5-3 5.5-3 8 0s5.5 3 8 0',
-    vortex:    'M12 12a1.5 1.5 0 1 1 1.5 1.5 M13.5 13.5A4 4 0 1 1 16 9 M16 9a7 7 0 1 1-9.5 9',
-    particles: 'M5 7h.01 M12 4.5h.01 M19 8h.01 M8 13h.01 M15 12h.01 M19 17h.01 M11 19h.01 M4 18h.01',
-    undo:      'M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
-    redo:      'M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
-    camera:    'M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
-    expand:    'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
-    presets:   'M6 4h12v17l-6-4-6 4z',
-    scene:     'M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M3 12c0-3 4-5.5 9-5.5s9 2.5 9 5.5-4 5.5-9 5.5S3 15 3 12z M12 3v2 M12 19v2',
-    touch:     'M9 11V5a1.5 1.5 0 0 1 3 0v6 M12 10V8.5a1.5 1.5 0 0 1 3 0V11 M15 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-4.8-2.4L4 15a1.5 1.5 0 0 1 2.3-1.9L9 15',
-    look:      'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
-    light:     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M12 2v2 M12 20v2 M2 12h2 M20 12h2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4',
-    bulb:      'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z',
-    filters:   'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 3l3 7 M21 12l-7 1 M12 21l-3-7 M3 12l7-1',
-    layers:    'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
-    physics:   'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z',
-    fluid:     'M3 10c2.5-4 5.5-4 8 0s5.5 4 8 0 M3 16c2.5-4 5.5-4 8 0s5.5 4 8 0',
-    forces:    'M3 8h11a3 3 0 1 0-3-3 M3 12h15a3 3 0 1 1-3 3 M3 16h7',
-    edges:     'M4 4h16v16H4z M8 8h8v8H8z',
-    text:      'M5 6V4h14v2 M12 4v16 M9 20h6',
-    system:    'M4 7h10 M18 7h2 M4 17h4 M12 17h8 M14 5v4 M8 15v4',
-    gauge:     'M4 17a8 8 0 1 1 16 0 M12 17l4-5',
+const platform = window.RipplNative;
+
+// ---------- Device settings (kept on this device, never part of a preset) ----------
+
+const CAPTURE_SIZES = { 'Standard (720p)': 720, 'High (1080p)': 1080, 'Maximum (1440p)': 1440 };
+const SIM_RESOLUTIONS = { '32': 32, '64': 64, '128': 128, '256': 256 };
+const deviceSettings = { HAPTICS: true, KEEP_AWAKE: false };
+const DEVICE_CHOICES = {
+    PERFORMANCE_MODE: Object.keys(PERFORMANCE_MODES),
+    FPS_LIMIT: Object.keys(FPS_LIMITS),
+    EFFECT_QUALITY: EFFECT_NAMES,
+    PARTICLE_LIMIT: Object.keys(PARTICLE_AMOUNTS),
+    DYE_RESOLUTION: Object.values(QUALITY_LEVELS),
+    SIM_RESOLUTION: Object.values(SIM_RESOLUTIONS),
+    CAPTURE_RESOLUTION: Object.values(CAPTURE_SIZES),
+};
+const DEVICE_KEYS = Object.keys(DEVICE_CHOICES).concat(['RENDER_SCALE', 'ADAPTIVE_QUALITY', 'BATTERY_SAVER']);
+const deviceStore = { saved: null, timer: 0 };
+
+function deviceSnapshot () {
+    const out = { HAPTICS: deviceSettings.HAPTICS, KEEP_AWAKE: deviceSettings.KEEP_AWAKE };
+    DEVICE_KEYS.forEach(k => { out[k] = config[k]; });
+    return JSON.stringify(out);
+}
+
+// ---------- Graphics resets ----------
+
+// Android can take the GPU away from the app. One reset is routine; several close together
+// mean the device can't carry the current settings.
+const GFX_RESET_WINDOW = 2 * 60 * 1000;
+const GFX_RESETS_SAFE = 2;   // this many in the window: restart on safe settings
+const GFX_RESETS_STOP = 4;   // this many: stop restarting and explain
+const SAFE_DEVICE_SETTINGS = { EFFECT_QUALITY: 'Low', PARTICLE_LIMIT: 'Medium', ADAPTIVE_QUALITY: true };
+
+function recentGraphicsResets () {
+    let list = [];
+    try { list = JSON.parse(storeGet('rippl.gfxResets') || '[]'); } catch (e) { /* damaged: start counting again */ }
+    if (!Array.isArray(list)) return [];
+    const now = Date.now();
+    return list.filter(t => typeof t === 'number' && t <= now && now - t < GFX_RESET_WINDOW);
+}
+
+function applySafeDeviceSettings () {
+    Object.assign(config, SAFE_DEVICE_SETTINGS);
+    config.DYE_RESOLUTION = Math.min(config.DYE_RESOLUTION, 512);
+    config.SIM_RESOLUTION = Math.min(config.SIM_RESOLUTION, 128);
+    config.RENDER_SCALE = Math.min(config.RENDER_SCALE, 70);
+    showToast('Graphics kept resetting · quality lowered');
+}
+
+function reloadApp () {
+    window.location.reload();
+}
+
+function loadDeviceSettings () {
+    // Phones start capped at 60 frames a second with adaptive quality on; desktops run flat out
+    if (isMobile()) {
+        Object.assign(config, PERFORMANCE_MODES.Balanced);
+        config.PERFORMANCE_MODE = 'Balanced';
+    }
+    let stored = null;
+    try { stored = JSON.parse(storeGet('rippl.device') || 'null'); } catch (e) { /* damaged: use the defaults */ }
+    if (stored && typeof stored === 'object') {
+        DEVICE_KEYS.forEach(k => {
+            const v = stored[k];
+            if (typeof v !== typeof config[k]) return;
+            if (DEVICE_CHOICES[k] && DEVICE_CHOICES[k].indexOf(v) === -1) return;
+            if (typeof v === 'number' && !(v >= 0 && v <= 4096)) return;
+            // Devices without smooth texture filtering stay on the safe quality level
+            if (k === 'DYE_RESOLUTION' && !ext.supportLinearFiltering) return;
+            config[k] = v;
+        });
+        if (typeof stored.HAPTICS === 'boolean') deviceSettings.HAPTICS = stored.HAPTICS;
+        if (typeof stored.KEEP_AWAKE === 'boolean') deviceSettings.KEEP_AWAKE = stored.KEEP_AWAKE;
+    }
+    platform.setHaptics(deviceSettings.HAPTICS);
+    if (deviceSettings.KEEP_AWAKE) platform.keepAwake(true);
+    deviceStore.saved = deviceSnapshot();
+    if (recentGraphicsResets().length >= GFX_RESETS_SAFE) {
+        applySafeDeviceSettings();
+        deviceStore.saved = deviceSnapshot();
+        storeSet('rippl.device', deviceStore.saved);
+    }
+}
+
+// Saves device settings shortly after they change
+function persistDeviceSettings (dt) {
+    deviceStore.timer += dt;
+    if (deviceStore.timer < 1) return;
+    deviceStore.timer = 0;
+    const now = deviceSnapshot();
+    if (now === deviceStore.saved) return;
+    deviceStore.saved = now;
+    storeSet('rippl.device', now);
+}
+
+function setKeepAwake (on) {
+    deviceSettings.KEEP_AWAKE = on;
+    platform.keepAwake(on).then(ok => {
+        if (ok || !on) return;
+        deviceSettings.KEEP_AWAKE = false;
+        showToast('This device can’t keep the screen on from here');
+        refreshGUI();
+    });
+}
+
+// ---------- Descriptions ----------
+// One short sentence for every setting, shown when descriptions are switched on (the ? button)
+// and searched by the settings search. Keys are config keys (or PCT keys for mapped sliders).
+
+const HELP = {
+    // Scene
+    SIM_MODE: 'A ready-made scene. Each one sets its own forces and most keep moving on their own.',
+    SPEED: 'How fast the simulation runs. 1.0× is normal; 0 stops it.',
+    MIRROR_MODE: 'Repeats everything you paint across one or more mirror lines.',
+    KALEIDOSCOPE: 'Repeats everything you paint in rotated, reflected wedges around the centre.',
+    KALEIDO_SEGMENTS: 'How many wedges the kaleidoscope has.',
+    // Touch
+    GESTURE: 'What a finger does to the fluid as it moves.',
+    INJECTION: 'How color is released while you touch.',
+    TOUCH_FORCE: 'How hard every touch and automatic emitter pushes. 1.0× is normal.',
+    TOUCH_RADIUS: 'How wide an area each touch affects.',
+    TOUCH_SENSITIVITY: 'Below the middle, tiny jitters are ignored; above it, small movements are amplified.',
+    TOUCH_ATTRACTION: 'Pulls nearby fluid toward your finger while it is down.',
+    TOUCH_REPULSION: 'Pushes nearby fluid away from your finger while it is down.',
+    MULTI_TOUCH: 'Extra strength applied while two or more fingers are down.',
+    CONTINUOUS_DRAWING: 'Keeps adding color under a finger that is holding still.',
+    RANDOM_INJECTION: 'Every new touch starts with a burst of random colors.',
+    // Color
+    PALETTE: 'The set of colors the fluid is painted with.',
+    COLORFUL: 'Each finger changes to a new color from the palette every moment, instead of keeping one.',
+    AUTO_TRANSITION: 'Fades smoothly to the next palette every few seconds.',
+    TRANSITION_TIME: 'How long each palette stays before the next one fades in.',
+    RAINBOW: 'Colors sweep continuously around the color wheel.',
+    RAINBOW_SPD: 'How quickly the rainbow moves through its colors.',
+    BACKGROUND: 'What sits behind the fluid.',
+    BACK_COLOR: 'Your own background color. Choosing one switches the background to Custom.',
+    BG_BRIGHTNESS: 'Makes the background darker or brighter.',
+    BG_BLUR: 'Adds a soft, out-of-focus copy of the fluid behind the sharp one.',
+    BG_OPACITY: 'How strongly the background shows.',
+    BLACKLIGHT: 'Shows the fluid as fluorescent paint under ultraviolet light.',
+    BLACKLIGHT_INTENSITY: 'How strong the ultraviolet light is.',
+    FLUORESCENCE: 'How brightly the colors glow, including their glowing edges.',
+    UV_MODE: 'The color the fluid glows under blacklight.',
+    // Effects: light
+    BLOOM: 'Bright areas spill a soft glow onto their surroundings.',
+    BLOOM_INT: 'How strong the bloom glow is.',
+    BLOOM_THR: 'How bright a color must be before it blooms. Lower makes more of the picture glow.',
+    GLOW_INTENSITY: 'An extra halo around all color, bright or not.',
+    GLOW_RADIUS: 'How far the glow halo spreads.',
+    SUNRAYS: 'Beams of light streak out from the bright areas.',
+    SUNRAYS_W: 'How strong the sunrays are.',
+    FLARE: 'Adds camera-style streaks and ghosts around the brightest spots.',
+    FLARE_STYLE: 'The shape of the lens flare.',
+    // Effects: surface
+    SHADING: 'Lights the fluid from the side so it looks raised rather than flat.',
+    SPECULAR: 'Adds shiny highlights, as if the fluid were wet.',
+    SPECULAR_STYLE: 'How broad or tight the shiny highlights are.',
+    REFLECTION: 'Makes the surface mirror-like, picking up light from its surroundings.',
+    REFRACTION: 'Bends what is seen through the fluid, like looking through glass.',
+    DEPTH: 'Gives the fluid height, with relief lighting and a drop shadow.',
+    TRANSPARENCY: 'Lets the background show through the fluid.',
+    // Effects: tone
+    GAMMA: 'Remaps brightness the way a camera would, using the tone below.',
+    GAMMA_MODE: 'The brightness curve used by tone mapping.',
+    SATURATION: 'How vivid the colors are. The middle leaves them unchanged.',
+    CONTRAST: 'The difference between dark and bright. The middle leaves it unchanged.',
+    COLOR_VARIATION: 'Shifts hues slightly across the picture so colors look less uniform.',
+    FILTER: 'A warm color grade with a dark vignette and film grain.',
+    INVERT: 'Swaps every color for its opposite.',
+    // Effects: stylize
+    BLUR: 'Softens the whole picture.',
+    SHARPEN: 'Makes edges crisper.',
+    CHROMATIC_ABERRATION: 'Splits colors apart toward the edges, like a cheap lens.',
+    FRINGE: 'Adds colored fringes around bright edges.',
+    NEON: 'Draws the edges of the fluid as glowing lines.',
+    EMBOSS: 'Makes the picture look pressed into metal.',
+    PIXELS: 'Turns the picture into large square pixels.',
+    PIXEL_MODE: 'How big the pixels are.',
+    // Effects: motion
+    MOTION: 'Leaves fading copies of earlier frames behind moving color.',
+    MOTION_STYLE: 'How the echoes blend with the picture.',
+    MOTION_INTENSITY: 'How long the echoes last.',
+    SHAKE: 'Shakes the screen the harder you stir. Off when your device asks for reduced motion.',
+    SHAKE_STYLE: 'How strong the shake is.',
+    // Physics: fluid
+    RADIUS: 'How large each blob of color is when it enters the fluid.',
+    DISSIPATION: 'How long color takes to fade away.',
+    TRAILS: 'Color fades about eight times more slowly, leaving long trails.',
+    VISCOSITY: 'How thick the fluid is. Higher moves like honey.',
+    VORTICITY: 'How readily the fluid curls into small swirls.',
+    DRAG: 'How quickly motion dies down. Low keeps the fluid moving for a long time.',
+    FLOW_STRENGTH: 'How far the fluid carries its own motion. The middle is normal.',
+    PRESSURE_LEVEL: 'How carefully pressure is solved. Max is more accurate and uses more power.',
+    PRESSURE_STR: 'How much pressure carries over between frames. Higher feels springier.',
+    // Physics: forces
+    GRAVITY: 'Pulls colored fluid downward.',
+    BUOYANCY: 'Makes colored fluid sink or rise. The middle is neutral.',
+    TURBULENCE: 'Stirs the fluid with constantly shifting swirls.',
+    SWIRL: 'Spins the whole fluid around the centre.',
+    ELASTICITY: 'Makes the fluid spring back with a wobble.',
+    RANDOMNESS: 'Adds random variation to where color goes and how hard it is pushed.',
+    FLOW_DIRECTION: 'A steady current that carries the color in one direction or pattern.',
+    FLOW_SPEED: 'How fast the steady current moves.',
+    FORCE_FIELD: 'An invisible force that shapes the whole fluid.',
+    FIELD_STRENGTH: 'How strong the force field is.',
+    // Physics: edges
+    EDGE: 'What happens when fluid reaches the edge of the screen.',
+    CORNER: 'How the four corners treat the fluid.',
+    REPEL_STRENGTH: 'How hard a repelling edge or corner pushes the fluid back.',
+    REPEL_DISTANCE: 'How far from the edge the push begins.',
+    EDGE_BOUNCE: 'Makes fluid rebound off the edges.',
+    EDGE_FRICTION: 'Slows fluid down as it slides along the edges.',
+    EDGE_SOFTNESS: 'How gradually edge effects build up. Low is abrupt, high is gentle.',
+    // Particles
+    PARTICLES: 'Thousands of small particles that ride on the fluid’s motion.',
+    PARTICLE_STYLE: 'What each particle looks like.',
+    PARTICLE_AMOUNT: 'How many particles there are. More looks richer and uses more power.',
+    PARTICLE_COLOR_MODE: 'Where particles get their color.',
+    PARTICLE_COLOR: 'The color used when the color mode is Single Color.',
+    PARTICLE_MIX: 'The balance between the fluid and the particles, from fluid only to particles only.',
+    PARTICLE_INTENSITY: 'How bright the particles are.',
+    PARTICLE_SIZE: 'How big each particle is.',
+    PARTICLE_LENGTH: 'How long the streak behind a moving particle is.',
+    PARTICLE_GLOW: 'The halo around each particle.',
+    PARTICLE_SPEED: 'How fast particles follow the fluid.',
+    PARTICLE_DENSITY: 'The share of the particles that is shown.',
+    PARTICLE_SPREAD: 'Where particles appear: the whole screen at the top, around your finger lower down.',
+    PARTICLE_FADE: 'How quickly each particle disappears.',
+    PARTICLE_TURBULENCE: 'Adds jitter to particle paths.',
+    PARTICLE_ATTRACTION: 'Makes particles drift toward each other.',
+    PARTICLE_COLLISION: 'Crowded particles push each other apart.',
+    PARTICLE_TRAILS: 'Particles leave fading lines behind them.',
+    // Text
+    TEXT: 'Shows your words in the fluid.',
+    TEXT_MODE: 'Whether the letters pour color into the fluid or stand in its way.',
+    TEXT_FONT: 'The typeface.',
+    TEXT_SIZE: 'How big the letters are.',
+    TEXT_COLOR: 'The color of the letters.',
+    TEXT_OPACITY: 'How solid the letters look.',
+    TEXT_OUTLINE: 'Draws a line around each letter.',
+    TEXT_OUTLINE_THICKNESS: 'How thick the outline is.',
+    TEXT_GLOW: 'Adds a glow around the letters.',
+    TEXT_GLOW_INTENSITY: 'How strong the glow around the letters is.',
+    TEXT_X: 'Moves the text left or right.',
+    TEXT_Y: 'Moves the text up or down.',
+    TEXT_ROTATION: 'Turns the text. 0° is level.',
+    // System
+    PERFORMANCE_MODE: 'One tap sets all the options below for your battery or your eyes.',
+    DYE_RESOLUTION: 'How sharp the color is. Higher looks crisper and uses more power.',
+    SIM_RESOLUTION: 'How finely the motion is calculated. Higher gives smaller swirls and uses more power.',
+    FPS_LIMIT: 'The most frames drawn per second. Lower saves battery.',
+    RENDER_SCALE: 'The resolution the picture is drawn at, as a share of your screen’s.',
+    EFFECT_QUALITY: 'The resolution of bloom, sunrays and glow.',
+    PARTICLE_LIMIT: 'The most particles allowed, whatever the Particles tab asks for.',
+    ADAPTIVE_QUALITY: 'Lowers quality automatically when frames run slow and restores it when they recover.',
+    BATTERY_SAVER: 'Caps the frame rate, resolution, effects and particles to save power.',
+    CAPTURE_RESOLUTION: 'How large saved images are. Bigger takes a moment longer.',
+    TRANSPARENT: 'Saves images without a background, for use over other pictures.',
+    SPLASHES: 'Drops a few gentle splashes every couple of seconds, so the screen is never still.',
+    WALLPAPER_CLEAR: 'Clears the fluid and starts with new splashes each time you return to the app.',
 };
 
-function svgIcon (name) {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ICONS[name] + '"/></svg>';
+// Descriptions of individual choices; the one for the current choice is shown under the control
+const OPTION_HELP = {
+    SIM_MODE: {
+        'Standard Fluid': 'plain fluid with every scene force switched off.',
+        'Vortex': 'the fluid circles the centre.',
+        'Whirlpool': 'color pours in at the rim and drains in the middle.',
+        'Tornado': 'a rising, twisting column.',
+        'Explosion': 'bursts go off at regular intervals.',
+        'Fountain': 'a jet that arcs up and falls.',
+        'Waterfall': 'color falls from the top and out of the bottom.',
+        'Waves': 'a travelling ribbon of waves.',
+        'Orbit': 'planets of color on orbits around the centre.',
+        'Magnetic': 'color streams along field lines between two poles.',
+        'Plasma': 'crackling arcs in turbulence.',
+        'Galaxy': 'two spiral arms around a bright core.',
+        'Black Hole': 'clouds spiral inward and vanish.',
+        'Reverse Flow': 'the fluid moves against your finger.',
+    },
+    GESTURE: {
+        'Push': 'the classic: fluid follows your finger.',
+        'Pull': 'draws color in behind the finger.',
+        'Swirl': 'spins the fluid around the finger.',
+        'Attract': 'hold to pull color in.',
+        'Repel': 'hold to push color away.',
+        'Inject': 'adds color with very little force.',
+        'Erase': 'wipes color away.',
+        'Vortex': 'makes a whirlpool under the finger.',
+    },
+    INJECTION: {
+        'Continuous': 'a steady stream of color.',
+        'Burst': 'a ring of color when you touch down.',
+        'Pulse': 'rhythmic bursts while you hold.',
+        'Spray': 'spray-paint speckles.',
+        'Fountain': 'an upward jet.',
+        'Random': 'random directions and colors.',
+        'Directional': 'a steady jet in the direction you last moved.',
+    },
+    FORCE_FIELD: {
+        'None': 'no force field.',
+        'Vortex': 'everything circles the centre.',
+        'Attractor': 'everything is pulled to the centre.',
+        'Repeller': 'everything is pushed from the centre.',
+        'Spiral': 'everything spirals inward.',
+        'Radial': 'a turning star of rays.',
+        'Wave': 'travelling waves.',
+        'Magnetic': 'two poles, like a bar magnet.',
+    },
+    EDGE: {
+        'Wall': 'fluid stops at the edge.',
+        'Wrap': 'fluid leaving one side comes back on the other.',
+        'Void': 'fluid flows out and is gone.',
+        'Repel': 'the edge pushes fluid back before it arrives.',
+    },
+    TEXT_MODE: {
+        'Paint': 'the letters keep pouring color into the fluid.',
+        'Obstacle': 'the fluid flows around solid letters.',
+    },
+    PERFORMANCE_MODE: {
+        'Battery Saver': '30 frames a second, lower resolution, fewer particles.',
+        'Balanced': '60 frames a second with quality that adapts.',
+        'Performance': 'full resolution, no frame limit.',
+        'Maximum Performance': 'full resolution with the highest effect quality.',
+    },
+};
+
+// ---------- Control descriptions ----------
+
+const described = (key, control) => {
+    control.help = HELP[key];
+    if (OPTION_HELP[key]) control.optionHelp = OPTION_HELP[key];
+    return control;
+};
+
+const ctl = {
+    toggle: (key, label, after, extra) => described(key, Object.assign({
+        type: 'toggle', label,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }, extra)),
+    slider: (key, label, extra) => described(key, Object.assign({
+        type: 'slider', label,
+        get: () => config[key],
+        set: v => { config[key] = v; },
+    }, extra)),
+    // A 0-100% slider mapped onto a tuned engine value (see PCT)
+    pct: (key, label, extra) => described(key, Object.assign({
+        type: 'slider', label,
+        get: () => Math.round(Math.min(100, Math.max(0, PCT[key].from(config[PCT[key].cfg])))),
+        set: v => { config[PCT[key].cfg] = PCT[key].to(v); },
+    }, extra)),
+    select: (key, label, options, after, extra) => described(key, Object.assign({
+        type: 'select', label, options,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }, extra)),
+    color: (key, label, after) => described(key, {
+        type: 'color', label,
+        get: () => config[key],
+        set: v => { config[key] = v; if (after) after(v); },
+    }),
+    action: (label, run, help, extra) => Object.assign({ type: 'action', label, run, help }, extra),
+    heading: label => ({ type: 'heading', label }),
+};
+
+// Shows the given controls only while test() is true, so a feature's options appear with the feature
+const shownIf = (test, controls) => controls.map(c => Object.assign(c, { visible: test }));
+const on = key => () => !!config[key];
+const centered = (low, high) => v => v === 50 ? 'Neutral' : (v < 50 ? low : high) + ' ' + Math.abs(v - 50) * 2 + '%';
+
+function paletteSwatch (name) {
+    const colors = PALETTES[name] || ['#ff3b3b', '#ffd23b', '#3bff7a', '#3bb8ff', '#b03bff'];
+    return 'conic-gradient(' + colors.concat(colors[0]).join(', ') + ')';
 }
 
-const QUICK_ACTIONS = [
-    { id: 'random',    label: 'Random',    title: 'Randomize the look (R)',     icon: 'sparkle', run: randomizeConfig },
-    { id: 'freeze',    label: 'Freeze',    title: 'Freeze / resume (F)',        icon: 'pause',   run: toggleFreeze, on: () => config.PAUSED },
-    { id: 'splash',    label: 'Splash',    title: 'Random splashes (Space)',    icon: 'drop',    run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
-    { id: 'clear',     label: 'Clear',     title: 'Clear the fluid',            icon: 'clear',   run: () => { clearFluid(); showToast('Cleared'); } },
-    { id: 'palette',   label: 'Palette',   title: 'Next palette (C)',           icon: 'palette', run: cyclePalette },
-    { id: 'autoplay',  label: 'Auto-play', title: 'Auto-play (A)',              icon: 'wave',    run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
-    { id: 'vortex',    label: 'Vortex',    title: 'Vortex (V)',                 icon: 'vortex',  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
-    { id: 'particles', label: 'Particles', title: 'Particles (O)',              icon: 'particles', run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
-    { id: 'undo',      label: 'Undo',      title: 'Undo (Ctrl+Z)',              icon: 'undo',    run: undo },
-    { id: 'redo',      label: 'Redo',      title: 'Redo (Ctrl+Shift+Z)',        icon: 'redo',    run: redo },
-    { id: 'shot',      label: 'Capture',   title: 'Save a screenshot',          icon: 'camera',  run: captureScreenshot },
-    { id: 'full',      label: 'Fullscreen', title: 'Fullscreen',                icon: 'expand',  run: toggleFullscreen },
-];
-
-const panel = { header: null, sub: null, fps: null, quick: {}, shown: {} };
-
-function setPanelOpen (open) {
-    if (!guiRoot) return;
-    if (open) guiRoot.open(); else guiRoot.close();
-    if (guiRoot.domElement && guiRoot.domElement.classList) guiRoot.domElement.classList.toggle('ff-collapsed', !open);
-    if (panel.header) panel.header.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) refreshGUI();
+function backgroundSwatch (name) {
+    if (name === 'Transparent') return 'repeating-conic-gradient(#3a3a44 0 25%, #1c1c24 0 50%) 0 0 / 16px 16px';
+    if (name === 'Custom') return 'linear-gradient(135deg, #8b5cf6, #22d3ee, #f472b6)';
+    const b = BACKGROUNDS[name];
+    return 'linear-gradient(' + b[0] + ', ' + b[1] + ')';
 }
 
-// Header (brand, current preset, live fps) and the quick-action grid sit above the sections
-function buildPanelChrome (gui) {
-    const root = gui.domElement;
-    if (!root || !root.insertBefore || !document.createElement) return;
-
-    const header = document.createElement('button');
-    header.type = 'button';
-    header.className = 'ff-header';
-    header.setAttribute('aria-label', 'Show or hide the controls');
-    header.innerHTML =
-        '<span class="ff-logo">' + svgIcon('logo') + '</span>' +
-        '<span class="ff-titles"><span class="ff-title">RIPPL STUDIO</span><span class="ff-sub"></span></span>' +
-        '<span class="ff-fps" aria-hidden="true"></span>' +
-        '<span class="ff-chev" aria-hidden="true"></span>';
-    header.addEventListener('click', () => setPanelOpen(gui.closed));
-
-    const quick = document.createElement('div');
-    quick.className = 'ff-quick';
-    quick.setAttribute('role', 'toolbar');
-    quick.setAttribute('aria-label', 'Quick actions');
-    QUICK_ACTIONS.forEach(a => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'ff-q';
-        b.title = a.title;
-        b.setAttribute('aria-label', a.title);
-        if (a.on) b.setAttribute('aria-pressed', 'false');
-        b.innerHTML = svgIcon(a.icon) + '<span>' + a.label + '</span>';
-        b.addEventListener('click', () => {
-            a.run();
-            refreshGUI();
-            syncTopMenu(true);
-        });
-        quick.appendChild(b);
-        panel.quick[a.id] = b;
-    });
-
-    root.insertBefore(quick, root.firstChild);
-    root.insertBefore(header, root.firstChild);
-    panel.header = header;
-    panel.sub = header.querySelector('.ff-sub');
-    panel.fps = header.querySelector('.ff-fps');
-}
-
-// Adds an icon to a section title
-function decorateFolder (folder, icon) {
-    const ul = folder.__ul;
-    const title = ul && ul.querySelector && ul.querySelector('li.title');
-    if (!title || !document.createElement) return folder;
-    const span = document.createElement('span');
-    span.className = 'ff-ico';
-    span.innerHTML = svgIcon(icon);
-    title.insertBefore(span, title.firstChild);
-    return folder;
-}
-
-function section (parent, name, icon) {
-    return decorateFolder(parent.addFolder(name), icon);
-}
-
-// Keeps the header and the quick-action buttons in step with the app
-function syncTopMenu (force) {
-    if (!panel.header) return;
-    QUICK_ACTIONS.forEach(a => {
-        if (!a.on) return;
-        const on = !!a.on();
-        if (!force && panel.shown[a.id] === on) return;
-        panel.shown[a.id] = on;
-        const b = panel.quick[a.id];
-        b.classList.toggle('on', on);
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-        if (a.id === 'freeze') b.innerHTML = svgIcon(on ? 'play' : 'pause') + '<span>' + (on ? 'Resume' : 'Freeze') + '</span>';
-    });
-    const sub = presetState.current + ' · ' + config.SIM_MODE;
-    if (panel.shown.sub !== sub) {
-        panel.shown.sub = sub;
-        panel.sub.textContent = sub;
+// A small picture of a preset, built from its palette and background
+function presetPreview (name) {
+    const values = (isBuiltin(name) ? BUILTIN_PRESETS[name] : (findUserPreset(name) || {}).values) || {};
+    const colors = PALETTES[values.PALETTE] || ['#ff3b3b', '#ffd23b', '#3bff7a', '#3bb8ff', '#b03bff'];
+    let bg = BACKGROUNDS[values.BACKGROUND || 'Black'];
+    if (values.BACKGROUND === 'Custom' && values.BACK_COLOR) {
+        const c = 'rgb(' + [values.BACK_COLOR.r, values.BACK_COLOR.g, values.BACK_COLOR.b].map(Math.round).join(', ') + ')';
+        bg = [c, c];
     }
-    const fps = perf.fps + ' fps';
-    if (panel.shown.fps !== fps) {
-        panel.shown.fps = fps;
-        panel.fps.textContent = fps;
-    }
+    if (!bg) bg = ['#101014', '#000000'];
+    return 'radial-gradient(circle at 28% 38%, ' + colors[0] + ' 0, transparent 44%), ' +
+           'radial-gradient(circle at 74% 56%, ' + colors[2] + ' 0, transparent 46%), ' +
+           'radial-gradient(circle at 50% 88%, ' + colors[4] + ' 0, transparent 40%), ' +
+           'linear-gradient(' + bg[0] + ', ' + bg[1] + ')';
 }
 
-startGUI();
+const MIT_NOTICE = [
+    'MIT License',
+    '',
+    'Copyright (c) 2017 Pavel Dobryakov',
+    '',
+    'Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated ' +
+    'documentation files (the "Software"), to deal in the Software without restriction, including without limitation ' +
+    'the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and ' +
+    'to permit persons to whom the Software is furnished to do so, subject to the following conditions:',
+    '',
+    'The above copyright notice and this permission notice shall be included in all copies or substantial portions of ' +
+    'the Software.',
+    '',
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ' +
+    'THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE ' +
+    'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF ' +
+    'CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS ' +
+    'IN THE SOFTWARE.',
+].join('\n');
+
+function showAbout () {
+    openModal({
+        title: 'RIPPL Studio ' + APP_VERSION,
+        text: 'An interactive fluid simulation. Built on WebGL Fluid Simulation by Pavel Dobryakov, used under the MIT License below.',
+        input: MIT_NOTICE,
+        readOnly: true,
+        label: 'License',
+        buttons: [{ label: 'Close', primary: true }],
+    });
+}
+
+function showPrivacy () {
+    openModal({
+        title: 'Privacy',
+        text: 'RIPPL Studio doesn’t collect, send or share any data. There are no accounts, ads or analytics. ' +
+              'Your presets and settings stay on this device, and images are saved or shared only when you ask.',
+        buttons: [{ label: 'OK', primary: true }],
+    });
+}
+
+// The menu. Tabs hold sections; sections hold controls under headings. Options that belong to a
+// feature (bloom intensity, particle size, …) only appear while that feature is switched on.
+function buildTabs () {
+    const scene = [
+        { type: 'quick', label: 'Quick actions', items: [
+            { label: 'Splash',     icon: 'drop',      help: 'Adds a handful of random bursts of color.',    title: 'Add random splashes (Space)', run: () => splatStack.push(parseInt(Math.random() * 20) + 5) },
+            { label: 'Clear',      icon: 'clear',     help: 'Wipes the fluid clean.',                       title: 'Clear the fluid',             run: () => { clearFluid(); showToast('Cleared'); } },
+            { label: 'Palette',    icon: 'palette',   help: 'Switches to the next color palette.',          title: 'Next palette (C)',            run: cyclePalette },
+            { label: 'Auto-play',  icon: 'wave',      help: 'Three streams paint by themselves.',           title: 'Auto-play (A)',               run: () => toggleMode('AUTOPLAY', 'Auto-play'), on: () => config.AUTOPLAY },
+            { label: 'Vortex',     icon: 'vortex',    help: 'Orbiting arms stir a continuous whirlpool.',   title: 'Vortex (V)',                  run: () => toggleMode('VORTEX', 'Vortex'), on: () => config.VORTEX },
+            { label: 'Particles',  icon: 'particles', help: 'Thousands of particles ride the fluid.',       title: 'Particles (O)',               run: () => toggleMode('PARTICLES', 'Particles'), on: () => config.PARTICLES },
+            { label: 'Trails',     icon: 'physics',   help: 'Color fades slowly and leaves long trails.',   title: 'Color trails (T)',            run: () => toggleMode('TRAILS', 'Color trails'), on: () => config.TRAILS },
+            { label: 'Blacklight', icon: 'bulb',      help: 'Fluorescent colors under ultraviolet light.',  title: 'Blacklight (B)',              run: () => toggleMode('BLACKLIGHT', 'Blacklight'), on: () => config.BLACKLIGHT },
+        ] },
+        ctl.heading('Simulation'),
+        ctl.select('SIM_MODE', 'Mode', SIM_MODE_NAMES, null, {
+            chips: true,
+            set: v => { applySimMode(v); showToast('Mode · ' + v); },
+        }),
+        ctl.pct('SPEED', 'Speed', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.heading('Symmetry'),
+        ctl.select('MIRROR_MODE', 'Mirror', MIRROR_MODES, v => { if (v !== 'None') config.KALEIDOSCOPE = false; }, { chips: true }),
+        ctl.toggle('KALEIDOSCOPE', 'Kaleidoscope', v => { if (v) config.MIRROR_MODE = 'None'; }),
+        ...shownIf(on('KALEIDOSCOPE'), [
+            ctl.select('KALEIDO_SEGMENTS', 'Segments', SEGMENT_CHOICES, null, { chips: true }),
+        ]),
+    ];
+
+    const touch = [
+        ctl.heading('What a touch does'),
+        ctl.select('GESTURE', 'Gesture', GESTURE_MODES, null, { chips: true }),
+        ctl.select('INJECTION', 'Color release', INJECTION_MODES, null, { chips: true }),
+        ctl.toggle('CONTINUOUS_DRAWING', 'Keep drawing while held still'),
+        ctl.toggle('RANDOM_INJECTION', 'Random color for each touch'),
+        ctl.heading('Strength'),
+        ctl.pct('TOUCH_FORCE', 'Force', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.slider('TOUCH_RADIUS', 'Radius'),
+        ctl.slider('TOUCH_SENSITIVITY', 'Sensitivity'),
+        ctl.slider('MULTI_TOUCH', 'Multi-touch strength'),
+        ctl.heading('Pull and push'),
+        ctl.slider('TOUCH_ATTRACTION', 'Attraction'),
+        ctl.slider('TOUCH_REPULSION', 'Repulsion'),
+    ];
+
+    const palette = [
+        ctl.select('PALETTE', 'Palette', PALETTE_NAMES, null, { swatch: paletteSwatch, set: v => setPalette(v, 1.2) }),
+        ctl.toggle('COLORFUL', 'Keep changing color'),
+        ctl.heading('Automatic'),
+        ctl.toggle('AUTO_TRANSITION', 'Change palette automatically'),
+        ...shownIf(on('AUTO_TRANSITION'), [
+            ctl.select('TRANSITION_TIME', 'Time per palette', TRANSITION_CHOICES, null, { chips: true }),
+        ]),
+        ctl.toggle('RAINBOW', 'Rainbow'),
+        ...shownIf(on('RAINBOW'), [ctl.pct('RAINBOW_SPD', 'Rainbow speed')]),
+    ];
+
+    const background = [
+        ctl.select('BACKGROUND', 'Background', BACKGROUND_NAMES, null, { swatch: backgroundSwatch }),
+        ctl.color('BACK_COLOR', 'Custom color', () => { config.BACKGROUND = 'Custom'; }),
+        ctl.heading('Adjust'),
+        ctl.slider('BG_BRIGHTNESS', 'Brightness', { format: centered('Darker', 'Brighter') }),
+        ctl.slider('BG_OPACITY', 'Opacity'),
+        ctl.slider('BG_BLUR', 'Blurred fluid behind'),
+    ];
+
+    const blacklight = [
+        ctl.toggle('BLACKLIGHT', 'Blacklight'),
+        ...shownIf(on('BLACKLIGHT'), [
+            ctl.select('UV_MODE', 'UV color', Object.keys(UV_MODES), null, { chips: true }),
+            ctl.slider('BLACKLIGHT_INTENSITY', 'Intensity'),
+            ctl.slider('FLUORESCENCE', 'Fluorescence'),
+        ]),
+    ];
+
+    const light = [
+        ctl.heading('Bloom'),
+        ctl.toggle('BLOOM', 'Bloom'),
+        ...shownIf(on('BLOOM'), [
+            ctl.pct('BLOOM_INT', 'Bloom intensity'),
+            ctl.pct('BLOOM_THR', 'Bloom threshold'),
+        ]),
+        ctl.heading('Glow'),
+        ctl.slider('GLOW_INTENSITY', 'Glow'),
+        Object.assign(ctl.slider('GLOW_RADIUS', 'Glow radius'), { visible: () => config.GLOW_INTENSITY > 0 }),
+        ctl.heading('Rays and flare'),
+        ctl.toggle('SUNRAYS', 'Sunrays'),
+        ...shownIf(on('SUNRAYS'), [ctl.pct('SUNRAYS_W', 'Sunrays strength')]),
+        ctl.toggle('FLARE', 'Lens flare'),
+        ...shownIf(on('FLARE'), [ctl.select('FLARE_STYLE', 'Flare style', FLARE_STYLES, null, { chips: true })]),
+    ];
+
+    const surface = [
+        ctl.toggle('SHADING', 'Shading'),
+        ctl.toggle('SPECULAR', 'Shiny highlights'),
+        ...shownIf(on('SPECULAR'), [ctl.select('SPECULAR_STYLE', 'Highlight style', Object.keys(SPECULAR_STYLES))]),
+        ctl.heading('Material'),
+        ctl.slider('DEPTH', 'Depth'),
+        ctl.slider('REFLECTION', 'Reflection'),
+        ctl.slider('REFRACTION', 'Refraction'),
+        ctl.slider('TRANSPARENCY', 'Transparency'),
+    ];
+
+    const tone = [
+        ctl.slider('SATURATION', 'Saturation', { format: centered('Less', 'More') }),
+        ctl.slider('CONTRAST', 'Contrast', { format: centered('Less', 'More') }),
+        ctl.slider('COLOR_VARIATION', 'Color variation'),
+        ctl.heading('Looks'),
+        ctl.toggle('GAMMA', 'Tone mapping'),
+        ...shownIf(on('GAMMA'), [ctl.select('GAMMA_MODE', 'Tone', GAMMA_MODES, null, { chips: true })]),
+        ctl.toggle('FILTER', 'Film look'),
+        ctl.toggle('INVERT', 'Invert colors'),
+    ];
+
+    const stylize = [
+        ctl.heading('Sharpness'),
+        ctl.slider('BLUR', 'Blur'),
+        ctl.slider('SHARPEN', 'Sharpen'),
+        ctl.heading('Lens'),
+        ctl.slider('CHROMATIC_ABERRATION', 'Color split'),
+        ctl.toggle('FRINGE', 'Lens fringe'),
+        ctl.heading('Art styles'),
+        ctl.toggle('NEON', 'Neon outlines'),
+        ctl.toggle('EMBOSS', 'Emboss'),
+        ctl.toggle('PIXELS', 'Pixelate'),
+        ...shownIf(on('PIXELS'), [ctl.select('PIXEL_MODE', 'Pixel size', Object.keys(PIXEL_MODES), null, { chips: true })]),
+    ];
+
+    const motion = [
+        ctl.toggle('MOTION', 'Motion echoes'),
+        ...shownIf(on('MOTION'), [
+            ctl.select('MOTION_STYLE', 'Echo style', MOTION_STYLES),
+            ctl.slider('MOTION_INTENSITY', 'Echo strength'),
+        ]),
+        ctl.toggle('SHAKE', 'Screen shake', v => {
+            if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
+        }),
+        ...shownIf(on('SHAKE'), [ctl.select('SHAKE_STYLE', 'Shake strength', Object.keys(SHAKE_STYLES))]),
+    ];
+
+    const fluid = [
+        ctl.heading('Color'),
+        ctl.pct('RADIUS', 'Blob size'),
+        ctl.pct('DISSIPATION', 'Fade time', { format: v => fadeSeconds(v).toFixed(1) + ' s' }),
+        ctl.toggle('TRAILS', 'Long color trails'),
+        ctl.heading('Motion'),
+        ctl.slider('VISCOSITY', 'Thickness'),
+        ctl.pct('VORTICITY', 'Curl'),
+        ctl.pct('DRAG', 'Drag'),
+        ctl.slider('FLOW_STRENGTH', 'Flow strength', { format: v => pctSpeedTo(v).toFixed(1) + '×' }),
+        ctl.heading('Pressure'),
+        ctl.select('PRESSURE_LEVEL', 'Pressure accuracy', Object.keys(PRESSURE_LEVELS)),
+        ctl.pct('PRESSURE_STR', 'Pressure strength'),
+    ];
+
+    const forces = [
+        ctl.heading('Weight'),
+        ctl.slider('GRAVITY', 'Gravity'),
+        ctl.slider('BUOYANCY', 'Buoyancy', { format: centered('Sinks', 'Rises') }),
+        ctl.heading('Stirring'),
+        ctl.slider('TURBULENCE', 'Turbulence'),
+        ctl.slider('SWIRL', 'Swirl'),
+        ctl.slider('ELASTICITY', 'Elasticity'),
+        ctl.slider('RANDOMNESS', 'Randomness'),
+        ctl.heading('Current'),
+        ctl.select('FLOW_DIRECTION', 'Direction', Object.keys(FLOW_DIRECTIONS)),
+        Object.assign(ctl.slider('FLOW_SPEED', 'Current speed'), { visible: () => config.FLOW_DIRECTION !== 'None' }),
+        ctl.heading('Force field'),
+        ctl.select('FORCE_FIELD', 'Field', FORCE_FIELDS, null, { chips: true }),
+        Object.assign(ctl.slider('FIELD_STRENGTH', 'Field strength'), { visible: () => config.FORCE_FIELD !== 'None' }),
+    ];
+
+    const repelling = () => config.EDGE === 'Repel' || config.CORNER === 'Repel';
+    const edges = [
+        ctl.select('EDGE', 'Edges', EDGE_MODES, onEdgeChange),
+        ctl.select('CORNER', 'Corners', CORNER_MODES, null, { chips: true }),
+        ...shownIf(repelling, [
+            ctl.heading('Repel'),
+            ctl.slider('REPEL_STRENGTH', 'Repel strength'),
+            ctl.slider('REPEL_DISTANCE', 'Repel distance'),
+        ]),
+        ctl.heading('Feel'),
+        ctl.slider('EDGE_BOUNCE', 'Bounce'),
+        ctl.slider('EDGE_FRICTION', 'Friction'),
+        ctl.slider('EDGE_SOFTNESS', 'Softness'),
+    ];
+
+    const parts = [
+        ctl.toggle('PARTICLES', 'Particles'),
+        ...shownIf(on('PARTICLES'), [
+            ctl.select('PARTICLE_STYLE', 'Style', PARTICLE_STYLES, null, { chips: true }),
+            ctl.select('PARTICLE_AMOUNT', 'Amount', Object.keys(PARTICLE_AMOUNTS)),
+            ctl.slider('PARTICLE_MIX', 'Balance with the fluid', { format: v => v === 50 ? 'Both' : v < 50 ? 'Fluid ' + (100 - v) + '%' : 'Particles ' + v + '%' }),
+            ctl.heading('Color'),
+            ctl.select('PARTICLE_COLOR_MODE', 'Color mode', PARTICLE_COLOR_MODES),
+        ]),
+        Object.assign(ctl.color('PARTICLE_COLOR', 'Single color'), { visible: () => config.PARTICLES && config.PARTICLE_COLOR_MODE === 'Single Color' }),
+        ...shownIf(on('PARTICLES'), [
+            ctl.slider('PARTICLE_INTENSITY', 'Brightness'),
+            ctl.slider('PARTICLE_GLOW', 'Glow'),
+            ctl.heading('Shape'),
+            ctl.slider('PARTICLE_SIZE', 'Size'),
+            ctl.slider('PARTICLE_LENGTH', 'Streak length'),
+            ctl.toggle('PARTICLE_TRAILS', 'Trails'),
+            ctl.heading('Movement'),
+            ctl.slider('PARTICLE_SPEED', 'Speed'),
+            ctl.slider('PARTICLE_TURBULENCE', 'Jitter'),
+            ctl.slider('PARTICLE_ATTRACTION', 'Attraction'),
+            ctl.toggle('PARTICLE_COLLISION', 'Collision'),
+            ctl.heading('Where and how long'),
+            ctl.slider('PARTICLE_SPREAD', 'Spread'),
+            ctl.slider('PARTICLE_DENSITY', 'Density'),
+            ctl.slider('PARTICLE_FADE', 'Fade'),
+        ]),
+    ];
+
+    const text = [
+        ctl.toggle('TEXT', 'Show text'),
+        ctl.action('Edit text', editText, 'Type the words to show. New lines start a new row.', { icon: 'edit' }),
+        ...shownIf(on('TEXT'), [
+            ctl.select('TEXT_MODE', 'Behavior', TEXT_MODES),
+            ctl.heading('Letters'),
+            ctl.select('TEXT_FONT', 'Font', Object.keys(TEXT_FONTS)),
+            ctl.slider('TEXT_SIZE', 'Size'),
+            ctl.color('TEXT_COLOR', 'Color'),
+            ctl.slider('TEXT_OPACITY', 'Opacity'),
+            ctl.heading('Outline and glow'),
+            ctl.toggle('TEXT_OUTLINE', 'Outline'),
+        ]),
+        ...shownIf(() => config.TEXT && config.TEXT_OUTLINE, [ctl.slider('TEXT_OUTLINE_THICKNESS', 'Outline width')]),
+        ...shownIf(on('TEXT'), [ctl.toggle('TEXT_GLOW', 'Glow')]),
+        ...shownIf(() => config.TEXT && config.TEXT_GLOW, [ctl.slider('TEXT_GLOW_INTENSITY', 'Glow strength')]),
+        ...shownIf(on('TEXT'), [
+            ctl.heading('Position'),
+            ctl.slider('TEXT_X', 'Across'),
+            ctl.slider('TEXT_Y', 'Down'),
+            ctl.slider('TEXT_ROTATION', 'Rotation', { format: v => Math.round((v - 50) * 3.6) + '°' }),
+        ]),
+    ];
+
+    const performance = [
+        ctl.select('PERFORMANCE_MODE', 'Performance mode', Object.keys(PERFORMANCE_MODES), null, {
+            chips: true,
+            set: v => { applyPerformanceMode(v); showToast('Performance · ' + v); },
+        }),
+        ctl.toggle('BATTERY_SAVER', 'Battery saver'),
+        ctl.toggle('ADAPTIVE_QUALITY', 'Adaptive quality'),
+        ctl.heading('Detail'),
+        ctl.select('DYE_RESOLUTION', 'Color sharpness', QUALITY_LEVELS, initFramebuffers),
+        ctl.select('SIM_RESOLUTION', 'Motion detail', SIM_RESOLUTIONS, initFramebuffers),
+        ctl.select('EFFECT_QUALITY', 'Effect quality', EFFECT_NAMES),
+        ctl.slider('RENDER_SCALE', 'Render scale'),
+        ctl.heading('Limits'),
+        ctl.select('FPS_LIMIT', 'Frame rate limit', Object.keys(FPS_LIMITS)),
+        ctl.select('PARTICLE_LIMIT', 'Particle limit', Object.keys(PARTICLE_AMOUNTS)),
+    ];
+
+    const capture = [
+        ctl.action(platform.isNative ? 'Save image to gallery' : 'Save image', captureScreenshot,
+            'Saves the picture as it is now, without the controls.', { icon: 'camera', primary: true }),
+        ...(platform.canShare() ? [ctl.action('Share image', shareScreenshot, 'Sends the picture to another app.', { icon: 'share' })] : []),
+        ctl.select('CAPTURE_RESOLUTION', 'Image size', CAPTURE_SIZES),
+        ctl.toggle('TRANSPARENT', 'Transparent background in images'),
+        ctl.heading('Living display'),
+        ctl.toggle('SPLASHES', 'Gentle automatic splashes'),
+        ctl.toggle('WALLPAPER_CLEAR', 'Start fresh when you come back'),
+        ctl.action('Hide the controls', () => window.RipplUI.setHidden(true),
+            'Shows only the fluid. Tap the small arrow at the bottom to bring the controls back.', { icon: 'hide' }),
+        ...(platform.isNative ? [] : [ctl.action('Fullscreen', toggleFullscreen, 'Fills the whole screen, hiding the browser.', { icon: 'expand' })]),
+        ctl.action('Use as a wallpaper', showWallpaperInfo, 'How to use RIPPL Studio as a wallpaper or a living display.', { icon: 'phone' }),
+    ];
+
+    const app = [
+        { type: 'toggle', label: 'Haptic feedback',
+          help: 'A light vibration when you tap a control.',
+          get: () => deviceSettings.HAPTICS,
+          set: v => { deviceSettings.HAPTICS = v; platform.setHaptics(v); } },
+        { type: 'toggle', label: 'Keep the screen on',
+          help: 'Stops the screen from dimming or locking while RIPPL Studio is open.',
+          get: () => deviceSettings.KEEP_AWAKE, set: setKeepAwake },
+        ctl.heading('About'),
+        ctl.action('About RIPPL Studio', showAbout, 'Version, credits and license.', { icon: 'logo' }),
+        ctl.action('Privacy', showPrivacy, 'What RIPPL Studio does with your data: nothing leaves your device.', { icon: 'look' }),
+    ];
+
+    return [
+        { id: 'presets', label: 'Presets', icon: 'presets', custom: 'presets',
+          help: 'Saved looks. Tap one to use it; save your own from the current settings.' },
+        { id: 'scene', label: 'Scene', icon: 'scene', sections: [
+            { id: 'scene', label: 'Scene', controls: scene, help: 'What is happening on screen.' },
+            { id: 'touch', label: 'Touch', controls: touch, help: 'What your fingers do to the fluid.' },
+        ] },
+        { id: 'color', label: 'Color', icon: 'palette', sections: [
+            { id: 'palette', label: 'Palette', controls: palette, help: 'The colors the fluid is painted with.' },
+            { id: 'background', label: 'Background', controls: background, help: 'What sits behind the fluid.' },
+            { id: 'blacklight', label: 'Blacklight', controls: blacklight, help: 'Fluorescent paint under ultraviolet light.' },
+        ] },
+        { id: 'effects', label: 'Effects', icon: 'sparkle', sections: [
+            { id: 'light', label: 'Light', controls: light, help: 'Glow and light that spills from the bright areas.' },
+            { id: 'surface', label: 'Surface', controls: surface, help: 'How the surface of the fluid catches the light.' },
+            { id: 'tone', label: 'Tone', controls: tone, help: 'Overall color and brightness of the picture.' },
+            { id: 'stylize', label: 'Stylize', controls: stylize, help: 'Filters that change the style of the whole picture.' },
+            { id: 'motion', label: 'Motion', controls: motion, help: 'Effects that follow movement.' },
+        ] },
+        { id: 'physics', label: 'Physics', icon: 'physics', sections: [
+            { id: 'fluid', label: 'Fluid', controls: fluid, help: 'How the fluid itself behaves.' },
+            { id: 'forces', label: 'Forces', controls: forces, help: 'Forces that act on the fluid without you touching it.' },
+            { id: 'edges', label: 'Edges', controls: edges, help: 'What happens at the edges of the screen.' },
+        ] },
+        { id: 'layers', label: 'Layers', icon: 'layers', sections: [
+            { id: 'particles', label: 'Particles', controls: parts, help: 'Small particles that ride on the fluid.' },
+            { id: 'text', label: 'Text', controls: text, help: 'Words that paint into the fluid or stand in its way.' },
+        ] },
+        { id: 'system', label: 'System', icon: 'system', sections: [
+            { id: 'performance', label: 'Performance', controls: performance, help: 'Trade picture quality against speed and battery.' },
+            { id: 'capture', label: 'Capture', controls: capture, help: 'Save and share images, or let the app run as a display.' },
+            { id: 'app', label: 'App', controls: app, help: 'Settings for the app itself.' },
+        ] },
+    ];
+}
+
+function startUI () {
+    loadDeviceSettings();
+    const builtinNow = () => isBuiltin(presetState.current);
+    window.RipplUI.init({
+        title: 'RIPPL STUDIO',
+        startTab: 'scene',
+        tabs: buildTabs(),
+        dock: [
+            { label: 'Presets', icon: 'presets', title: 'Presets', run: () => window.RipplUI.open('presets') },
+            { label: 'Random',  icon: 'sparkle', title: 'Randomize the look (R)', run: randomizeConfig },
+            { label: 'Controls', icon: 'controls', title: 'Open the controls', main: true },
+            { label: () => config.PAUSED ? 'Resume' : 'Freeze', icon: () => config.PAUSED ? 'play' : 'pause',
+              title: 'Freeze or resume (F)', run: toggleFreeze, on: () => config.PAUSED },
+            { label: 'Capture', icon: 'camera', title: 'Save an image', run: captureScreenshot },
+        ],
+        headActions: [
+            { label: 'Undo the last change', icon: 'undo', run: undo },
+            { label: 'Redo', icon: 'redo', run: redo },
+        ],
+        presets: {
+            names: presetNames,
+            current: () => presetState.current,
+            isBuiltin,
+            preview: presetPreview,
+            select: name => { selectPreset(name, true); showToast(name); },
+            actions: [
+                { label: 'Save this look', icon: 'save', run: presetSave, primary: true, wide: true,
+                  help: 'Keeps the current settings. Updates the selected preset, or makes a new one if a built-in is selected.' },
+                { label: 'Rename', icon: 'edit', run: presetRenamePrompt, disabled: builtinNow, help: 'Gives the selected preset a new name.' },
+                { label: 'Duplicate', icon: 'copy', run: presetClone, help: 'Makes a copy of the current settings as a new preset.' },
+                { label: 'Share', icon: 'share', run: presetExport, help: 'Sends the selected preset to someone, as a file or as text.' },
+                { label: 'Import', icon: 'open', run: presetImport, help: 'Adds a preset someone shared with you.' },
+                { label: 'New blank', icon: 'plus', run: presetNew, help: 'Starts a new preset from the default settings.' },
+                { label: 'Delete', icon: 'trash', run: presetDelete, danger: true, disabled: builtinNow, help: 'Removes the selected preset from this device.' },
+                { label: 'Reset everything', icon: 'reset', run: resetSimulation, danger: true, wide: true,
+                  help: 'Returns to the Default preset and clears the fluid. Undo brings your settings back.' },
+            ],
+        },
+        status: () => presetState.current + ' · ' + config.SIM_MODE + ' · ' + perf.fps + ' fps',
+        toast: showToast,
+        dialogOpen: modalOpen,
+        closeDialog: () => { if (!modalOpen()) return false; closeModal(); return true; },
+    });
+}
+
+startUI();
 
 function getWebGLContext (canvas) {
     const params = { alpha: true, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
@@ -3092,13 +3807,20 @@ function getWebGLContext (canvas) {
 
 // Shows a readable message on the page and stops the script
 function fatal (message) {
+    const inApp = !!(window.RipplNative && window.RipplNative.isNative);
+    showFatal(message + (inApp
+        ? ' Updating “Android System WebView” from the Play Store usually fixes this.'
+        : ' Try a recent version of Chrome, Firefox or Safari.'));
+    throw new Error(message);
+}
+
+// Covers the app with a readable message
+function showFatal (text) {
     const box = document.createElement('div');
     box.setAttribute('role', 'alert');
-    box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;' +
-        'background:#000;color:#eee;font:16px/1.5 system-ui,-apple-system,Roboto,sans-serif;text-align:center;z-index:30';
-    box.textContent = message + ' Try a recent version of Chrome, Firefox or Safari.';
+    box.className = 'rs-fatal';
+    box.textContent = text;
     document.body.appendChild(box);
-    throw new Error(message);
 }
 
 function getSupportedFormat (gl, internalFormat, format, type)
@@ -3139,236 +3861,12 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
     return status == gl.FRAMEBUFFER_COMPLETE;
 }
 
-function startGUI () {
-    var gui = new dat.GUI({ width: 344, hideable: false });
-    guiRoot = gui;
-    buildPanelChrome(gui);
-
-    // Presets
-    let presets = section(gui, 'Presets', 'presets');
-    presetCtrl = presets.add(ui7, 'preset', presetNames()).name('preset').onChange(v => selectPreset(v, true));
-    presets.add(ui7, 'presetName').name('name').onFinishChange(presetRename);
-    presets.add({ fun: presetSave }, 'fun').name('Save preset');
-    presets.add({ fun: presetNew }, 'fun').name('New preset');
-    presets.add({ fun: presetClone }, 'fun').name('Duplicate');
-    presets.add({ fun: presetExport }, 'fun').name('Export / share');
-    presets.add({ fun: presetImport }, 'fun').name('Load from file or text');
-    let del = presets.add({ fun: presetDelete }, 'fun').name('Delete preset');
-    if (del.__li && del.__li.classList) del.__li.classList.add('ff-danger');
-    let reset = presets.add({ fun: resetSimulation }, 'fun').name('Reset everything');
-    if (reset.__li && reset.__li.classList) reset.__li.classList.add('ff-danger');
-
-    // Scene: what is happening on screen
-    let scene = section(gui, 'Scene', 'scene');
-    scene.add(config, 'SIM_MODE', SIM_MODE_NAMES).name('simulation mode').onChange(v => {
-        applySimMode(v);
-        showToast('Mode · ' + v);
-    });
-    scene.add(config, 'AUTOPLAY').name('auto-play');
-    scene.add(config, 'VORTEX').name('vortex');
-    scene.add(config, 'KALEIDOSCOPE').name('kaleidoscope').onChange(v => {
-        if (v) config.MIRROR_MODE = 'None';
-        refreshGUI();
-    });
-    scene.add(config, 'KALEIDO_SEGMENTS', SEGMENT_CHOICES).name('segments')
-        .onChange(v => { config.KALEIDO_SEGMENTS = Number(v); });
-    scene.add(config, 'MIRROR_MODE', MIRROR_MODES).name('mirror').onChange(v => {
-        if (v !== 'None') config.KALEIDOSCOPE = false;
-        refreshGUI();
-    });
-    addPct(scene, 'SPEED', 'speed');
-
-    // Touch: what your fingers do
-    let touch = section(gui, 'Touch', 'touch');
-    touch.add(config, 'GESTURE', GESTURE_MODES).name('gesture');
-    touch.add(config, 'INJECTION', INJECTION_MODES).name('injection');
-    addPct(touch, 'TOUCH_FORCE', 'force');
-    touch.add(config, 'TOUCH_RADIUS', 0, 100).step(1).name('radius');
-    touch.add(config, 'TOUCH_SENSITIVITY', 0, 100).step(1).name('sensitivity');
-    touch.add(config, 'TOUCH_ATTRACTION', 0, 100).step(1).name('attraction');
-    touch.add(config, 'TOUCH_REPULSION', 0, 100).step(1).name('repulsion');
-    touch.add(config, 'MULTI_TOUCH', 0, 100).step(1).name('multi-touch strength');
-    touch.add(config, 'CONTINUOUS_DRAWING').name('continuous drawing');
-    touch.add(config, 'RANDOM_INJECTION').name('random color per touch');
-
-    // Look: everything about color and light
-    let look = section(gui, 'Look', 'look');
-
-    let color = section(look, 'Color', 'palette');
-    color.add(config, 'PALETTE', PALETTE_NAMES).name('palette').onChange(v => setPalette(v, 1.2));
-    color.add(config, 'AUTO_TRANSITION').name('auto transitions');
-    color.add(config, 'TRANSITION_TIME', TRANSITION_CHOICES).name('time per palette')
-        .onChange(v => { config.TRANSITION_TIME = Number(v); });
-    color.add(config, 'RAINBOW').name('rainbow');
-    addPct(color, 'RAINBOW_SPD', 'rainbow speed');
-    color.add(config, 'COLORFUL').name('color cycling');
-
-    let lighting = section(look, 'Lighting', 'light');
-    lighting.add(config, 'SHADING').name('shading');
-    lighting.add(config, 'BLOOM').name('bloom');
-    addPct(lighting, 'BLOOM_INT', 'bloom intensity');
-    addPct(lighting, 'BLOOM_THR', 'bloom threshold');
-    lighting.add(config, 'GLOW_INTENSITY', 0, 100).step(1).name('glow');
-    lighting.add(config, 'GLOW_RADIUS', 0, 100).step(1).name('glow radius');
-    lighting.add(config, 'SUNRAYS').name('sunrays');
-    addPct(lighting, 'SUNRAYS_W', 'sunrays weight');
-    lighting.add(config, 'FLARE').name('lens flare');
-    lighting.add(config, 'FLARE_STYLE', FLARE_STYLES).name('flare style');
-    lighting.add(config, 'SPECULAR').name('specular');
-    lighting.add(config, 'SPECULAR_STYLE', Object.keys(SPECULAR_STYLES)).name('specular style');
-    lighting.add(config, 'REFLECTION', 0, 100).step(1).name('reflection');
-    lighting.add(config, 'REFRACTION', 0, 100).step(1).name('refraction');
-    lighting.add(config, 'DEPTH', 0, 100).step(1).name('depth');
-    lighting.add(config, 'TRANSPARENCY', 0, 100).step(1).name('transparency');
-
-    let blacklight = section(look, 'Blacklight', 'bulb');
-    blacklight.add(config, 'BLACKLIGHT').name('blacklight');
-    blacklight.add(config, 'BLACKLIGHT_INTENSITY', 0, 100).step(1).name('intensity');
-    blacklight.add(config, 'FLUORESCENCE', 0, 100).step(1).name('fluorescence');
-    blacklight.add(config, 'UV_MODE', Object.keys(UV_MODES)).name('UV color');
-
-    let filters = section(look, 'Filters', 'filters');
-    filters.add(config, 'GAMMA').name('tone mapping');
-    filters.add(config, 'GAMMA_MODE', GAMMA_MODES).name('tone');
-    filters.add(config, 'SATURATION', 0, 100).step(1).name('saturation');
-    filters.add(config, 'CONTRAST', 0, 100).step(1).name('contrast');
-    filters.add(config, 'COLOR_VARIATION', 0, 100).step(1).name('color variation');
-    filters.add(config, 'BLUR', 0, 100).step(1).name('blur');
-    filters.add(config, 'SHARPEN', 0, 100).step(1).name('sharpen');
-    filters.add(config, 'CHROMATIC_ABERRATION', 0, 100).step(1).name('chromatic aberration');
-    filters.add(config, 'FRINGE').name('lens fringe');
-    filters.add(config, 'NEON').name('neon outlines');
-    filters.add(config, 'EMBOSS').name('emboss');
-    filters.add(config, 'PIXELS').name('pixelate');
-    filters.add(config, 'PIXEL_MODE', Object.keys(PIXEL_MODES)).name('pixel size');
-    filters.add(config, 'FILTER').name('film look');
-    filters.add(config, 'INVERT').name('invert');
-    filters.add(config, 'MOTION').name('motion echoes');
-    filters.add(config, 'MOTION_STYLE', MOTION_STYLES).name('echo style');
-    filters.add(config, 'MOTION_INTENSITY', 0, 100).step(1).name('echo strength');
-    filters.add(config, 'SHAKE').name('shake').onChange(v => {
-        if (v && prefersReducedMotion()) showToast('Shake is off because your device asks for reduced motion');
-    });
-    filters.add(config, 'SHAKE_STYLE', Object.keys(SHAKE_STYLES)).name('shake style');
-
-    let background = section(look, 'Background', 'layers');
-    background.add(config, 'BACKGROUND', BACKGROUND_NAMES).name('background');
-    background.addColor(config, 'BACK_COLOR').name('custom color').onChange(() => {
-        config.BACKGROUND = 'Custom';
-        refreshGUI();
-    });
-    background.add(config, 'BG_BRIGHTNESS', 0, 100).step(1).name('brightness');
-    background.add(config, 'BG_BLUR', 0, 100).step(1).name('blur');
-    background.add(config, 'BG_OPACITY', 0, 100).step(1).name('opacity');
-
-    // Physics: how the fluid itself behaves
-    let physics = section(gui, 'Physics', 'physics');
-
-    let fluid = section(physics, 'Fluid', 'fluid');
-    fluid.add(config, 'DYE_RESOLUTION', QUALITY_LEVELS).name('quality').onFinishChange(initFramebuffers);
-    fluid.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    addPct(fluid, 'RADIUS', 'splat radius');
-    addPct(fluid, 'DISSIPATION', 'dissipation');
-    fluid.add(config, 'TRAILS').name('color trails');
-    fluid.add(config, 'VISCOSITY', 0, 100).step(1).name('viscosity');
-    addPct(fluid, 'VORTICITY', 'vorticity');
-    addPct(fluid, 'DRAG', 'drag');
-    fluid.add(config, 'FLOW_STRENGTH', 0, 100).step(1).name('flow strength');
-    fluid.add(config, 'PRESSURE_LEVEL', Object.keys(PRESSURE_LEVELS)).name('pressure solver');
-    addPct(fluid, 'PRESSURE_STR', 'pressure strength');
-
-    let forces = section(physics, 'Forces', 'forces');
-    forces.add(config, 'GRAVITY', 0, 100).step(1).name('gravity');
-    forces.add(config, 'BUOYANCY', 0, 100).step(1).name('buoyancy (50 = none)');
-    forces.add(config, 'TURBULENCE', 0, 100).step(1).name('turbulence');
-    forces.add(config, 'SWIRL', 0, 100).step(1).name('swirl');
-    forces.add(config, 'ELASTICITY', 0, 100).step(1).name('elasticity');
-    forces.add(config, 'RANDOMNESS', 0, 100).step(1).name('randomness');
-    forces.add(config, 'FLOW_DIRECTION', Object.keys(FLOW_DIRECTIONS)).name('flow direction');
-    forces.add(config, 'FLOW_SPEED', 0, 100).step(1).name('flow speed');
-    forces.add(config, 'FORCE_FIELD', FORCE_FIELDS).name('force field');
-    forces.add(config, 'FIELD_STRENGTH', 0, 100).step(1).name('field strength');
-
-    let edges = section(physics, 'Edges', 'edges');
-    edges.add(config, 'EDGE', EDGE_MODES).name('edge').onChange(onEdgeChange);
-    edges.add(config, 'CORNER', CORNER_MODES).name('corners');
-    edges.add(config, 'REPEL_STRENGTH', 0, 100).step(1).name('repel strength');
-    edges.add(config, 'REPEL_DISTANCE', 0, 100).step(1).name('repel distance');
-    edges.add(config, 'EDGE_BOUNCE', 0, 100).step(1).name('bounce');
-    edges.add(config, 'EDGE_FRICTION', 0, 100).step(1).name('friction');
-    edges.add(config, 'EDGE_SOFTNESS', 0, 100).step(1).name('softness');
-
-    // Particles
-    let parts = section(gui, 'Particles', 'particles');
-    parts.add(config, 'PARTICLES').name('particles');
-    parts.add(config, 'PARTICLE_STYLE', PARTICLE_STYLES).name('style');
-    parts.add(config, 'PARTICLE_AMOUNT', Object.keys(PARTICLE_AMOUNTS)).name('amount');
-    parts.add(config, 'PARTICLE_COLOR_MODE', PARTICLE_COLOR_MODES).name('color mode');
-    parts.addColor(config, 'PARTICLE_COLOR').name('single color');
-    parts.add(config, 'PARTICLE_MIX', 0, 100).step(1).name('mix with fluid');
-    parts.add(config, 'PARTICLE_INTENSITY', 0, 100).step(1).name('brightness');
-    parts.add(config, 'PARTICLE_SIZE', 0, 100).step(1).name('size');
-    parts.add(config, 'PARTICLE_LENGTH', 0, 100).step(1).name('streak length');
-    parts.add(config, 'PARTICLE_GLOW', 0, 100).step(1).name('glow');
-    parts.add(config, 'PARTICLE_SPEED', 0, 100).step(1).name('speed');
-    parts.add(config, 'PARTICLE_DENSITY', 0, 100).step(1).name('density');
-    parts.add(config, 'PARTICLE_SPREAD', 0, 100).step(1).name('spread');
-    parts.add(config, 'PARTICLE_FADE', 0, 100).step(1).name('fade');
-    parts.add(config, 'PARTICLE_TURBULENCE', 0, 100).step(1).name('turbulence');
-    parts.add(config, 'PARTICLE_ATTRACTION', 0, 100).step(1).name('attraction');
-    parts.add(config, 'PARTICLE_COLLISION').name('collision');
-    parts.add(config, 'PARTICLE_TRAILS').name('trails');
-
-    // Text
-    let text = section(gui, 'Text', 'text');
-    text.add(config, 'TEXT').name('show text');
-    text.add({ fun: editText }, 'fun').name('Edit text');
-    text.add(config, 'TEXT_MODE', TEXT_MODES).name('mode');
-    text.add(config, 'TEXT_FONT', Object.keys(TEXT_FONTS)).name('font');
-    text.add(config, 'TEXT_SIZE', 0, 100).step(1).name('size');
-    text.addColor(config, 'TEXT_COLOR').name('color');
-    text.add(config, 'TEXT_OPACITY', 0, 100).step(1).name('opacity');
-    text.add(config, 'TEXT_OUTLINE').name('outline');
-    text.add(config, 'TEXT_OUTLINE_THICKNESS', 0, 100).step(1).name('outline width');
-    text.add(config, 'TEXT_GLOW').name('glow');
-    text.add(config, 'TEXT_GLOW_INTENSITY', 0, 100).step(1).name('glow strength');
-    text.add(config, 'TEXT_X', 0, 100).step(1).name('position x');
-    text.add(config, 'TEXT_Y', 0, 100).step(1).name('position y');
-    text.add(config, 'TEXT_ROTATION', 0, 100).step(1).name('rotation (50 = level)');
-
-    // System: device settings, capture and wallpaper
-    let system = section(gui, 'System', 'system');
-
-    let perfFolder = section(system, 'Performance', 'gauge');
-    perfFolder.add(config, 'PERFORMANCE_MODE', Object.keys(PERFORMANCE_MODES)).name('mode').onChange(v => {
-        applyPerformanceMode(v);
-        showToast('Performance · ' + v);
-    });
-    perfFolder.add(config, 'FPS_LIMIT', Object.keys(FPS_LIMITS)).name('frame rate limit');
-    perfFolder.add(config, 'RENDER_SCALE', 0, 100).step(1).name('render scale');
-    perfFolder.add(config, 'EFFECT_QUALITY', EFFECT_NAMES).name('effect quality');
-    perfFolder.add(config, 'PARTICLE_LIMIT', Object.keys(PARTICLE_AMOUNTS)).name('particle limit');
-    perfFolder.add(config, 'ADAPTIVE_QUALITY').name('adaptive quality');
-    perfFolder.add(config, 'BATTERY_SAVER').name('battery saver');
-
-    let capture = section(system, 'Capture & Wallpaper', 'camera');
-    capture.add({ fun: captureScreenshot }, 'fun').name('Save screenshot');
-    capture.add(config, 'TRANSPARENT').name('transparent screenshots');
-    capture.add(config, 'SPLASHES').name('ambient splashes');
-    capture.add(config, 'WALLPAPER_CLEAR').name('fresh start on return');
-    capture.add({ fun: showWallpaperInfo }, 'fun').name('Use as wallpaper');
-
-    // Start with the everyday sections open
-    scene.open();
-    syncTopMenu(true);
-    setPanelOpen(!isMobile());
-}
-
 function isMobile () {
     return /Mobi|Android/i.test(navigator.userAgent);
 }
 
-function captureScreenshot () {
+// Renders the current frame at the chosen image size and hands back a PNG
+function captureImage () {
     let res = getResolution(config.CAPTURE_RESOLUTION);
     let target = createFBO(res.width, res.height, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
     render(target);
@@ -3379,8 +3877,41 @@ function captureScreenshot () {
     destroyFBO(target);
 
     let captureCanvas = textureToCanvas(texture, target.width, target.height);
-    let datauri = captureCanvas.toDataURL();
-    downloadURI('rippl.png', datauri);
+    return new Promise((resolve, reject) => {
+        captureCanvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('The image could not be created')), 'image/png');
+    });
+}
+
+function captureName () {
+    const d = new Date();
+    const two = n => ('0' + n).slice(-2);
+    return 'rippl-' + d.getFullYear() + two(d.getMonth() + 1) + two(d.getDate()) + '-' +
+           two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds()) + '.png';
+}
+
+let captureBusy = false;
+
+function exportImage (send, messages) {
+    if (captureBusy) return;
+    captureBusy = true;
+    captureImage()
+        .then(blob => send(blob, captureName()))
+        .then(result => { if (messages[result]) showToast(messages[result]); })
+        .catch(e => {
+            console.error(e);
+            showToast('Couldn’t save the image · try a smaller image size');
+        })
+        .then(() => { captureBusy = false; });
+}
+
+function captureScreenshot () {
+    exportImage((blob, name) => platform.saveImage(blob, name),
+        { saved: 'Saved to your gallery', downloaded: 'Image saved' });
+}
+
+function shareScreenshot () {
+    exportImage((blob, name) => platform.shareFile(blob, name, 'Made with RIPPL Studio'),
+        { downloaded: 'Image saved' });
 }
 
 function framebufferToTexture (target) {
@@ -3418,15 +3949,6 @@ function textureToCanvas (texture, width, height) {
     ctx.putImageData(imageData, 0, 0);
 
     return captureCanvas;
-}
-
-function downloadURI (filename, uri) {
-    let link = document.createElement('a');
-    link.download = filename;
-    link.href = uri;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
 }
 
 class Material {
@@ -4714,12 +5236,6 @@ const blit = (() => {
     return fn;
 })();
 
-function CHECK_FRAMEBUFFER_STATUS () {
-    let status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-    if (status != gl.FRAMEBUFFER_COMPLETE)
-        console.trace("Framebuffer error: " + status);
-}
-
 let dye;
 let velocity;
 let divergence;
@@ -5005,15 +5521,27 @@ let frameDt = 1 / 60;   // seconds covered by the current frame
 let colorUpdateTimer = 0.0;
 let contextLost = false;
 
-// Android can drop the GPU context under memory pressure. Keep the current look and reload cleanly.
+let graphicsGaveUp = false;
+
+// Android can drop the GPU context under memory pressure. Keep the current look and reload
+// cleanly; resets that keep coming lower the quality on the next start (loadDeviceSettings),
+// and after too many the app stops reloading instead of looping.
 canvas.addEventListener('webglcontextlost', e => {
     e.preventDefault();
     contextLost = true;
     try { storeSet('fluidfix.recover', JSON.stringify(snapshotValues())); } catch (err) { /* nothing to keep */ }
+    const resets = recentGraphicsResets().concat(Date.now());
+    storeSet('rippl.gfxResets', JSON.stringify(resets));
+    if (resets.length >= GFX_RESETS_STOP) {
+        graphicsGaveUp = true;
+        showFatal('The graphics keep resetting, so RIPPL Studio has stopped restarting. ' +
+                  'Close other apps, then close and reopen RIPPL Studio.');
+        return;
+    }
     showToast('Graphics were reset · restoring…');
-    setTimeout(() => window.location.reload(), 5000);   // in case the browser never restores it
+    setTimeout(() => reloadApp(), 5000);   // in case the browser never restores it
 });
-canvas.addEventListener('webglcontextrestored', () => window.location.reload());
+canvas.addEventListener('webglcontextrestored', () => { if (!graphicsGaveUp) reloadApp(); });
 
 initPresets();
 update();
@@ -5058,8 +5586,8 @@ function update (timestamp) {
     }
     updateParticles(dt);
     render(null, dt);
-    syncTopMenu();
-    refreshOpenPanel(frameDt);
+    persistDeviceSettings(frameSeconds);
+    refreshOpenPanel(frameSeconds);
     requestAnimationFrame(update);
 }
 
@@ -5264,7 +5792,7 @@ function render (target, dt) {
         applyBloom(dye.read, bloom);
     if (config.SUNRAYS) {
         applySunrays(dye.read, dye.write, sunrays);
-        blur(sunrays, sunraysTemp, 1);
+        blurTarget(sunrays, sunraysTemp, 1);
     }
     if (config.GLOW_INTENSITY > 0)
         applyGlow();
@@ -5422,7 +5950,7 @@ function applySunrays (source, mask, destination) {
     blit(destination);
 }
 
-function blur (target, temp, iterations) {
+function blurTarget (target, temp, iterations) {
     blurProgram.bind();
     for (let i = 0; i < iterations; i++) {
         gl.uniform2f(blurProgram.uniforms.texelSize, target.texelSizeX, 0.0);
@@ -5612,7 +6140,7 @@ window.addEventListener('blur', () => pointers.forEach(updatePointerUpData));
 
 window.addEventListener('keydown', e => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON')) return;
-    if (e.target && e.target.closest && e.target.closest('.dg')) return;
+    if (e.target && e.target.closest && e.target.closest('.rs-ui')) return;
     if (modalOpen()) return;
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault();
@@ -5642,7 +6170,7 @@ window.addEventListener('keydown', e => {
         case 'KeyT': toggleMode('TRAILS', 'Color trails'); break;
         case 'KeyN': toggleMode('RAINBOW', 'Rainbow'); break;
         case 'KeyI': toggleMode('RANDOM_INJECTION', 'Random color on touch'); break;
-        case 'KeyH': document.body.classList.toggle('hide-ui'); break;
+        case 'KeyH': window.RipplUI.toggleHidden(); break;
         case 'KeyG': cycleSetting('GESTURE', GESTURE_MODES, 'Gesture'); break;
         case 'KeyJ': cycleSetting('INJECTION', INJECTION_MODES, 'Injection'); break;
         case 'KeyX': cycleSetting('FORCE_FIELD', FORCE_FIELDS, 'Force field'); break;
